@@ -1,0 +1,53 @@
+---
+- name: Deploy Infrastructure to Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    infra_namespace: "{{ infra_ns | default('infrastructure') }}"
+    k8s_dir: "{{ playbook_dir }}/../deployments"
+
+  tasks:
+    - name: Ensure namespaces exist
+      command: kubectl create namespace {{ item }} --dry-run=client -o yaml | kubectl apply -f -
+      loop:
+        - "{{ infra_namespace }}"
+
+    - name: Deploy data stores
+      command: kubectl apply -f {{ k8s_dir }}/{{ item }}
+      loop:
+        - postgres.yaml
+        - kafka.yaml
+        - redis.yaml
+      register: result
+      changed_when: "'created' in result.stdout or 'configured' in result.stdout"
+
+    - name: Wait for data stores
+      command: kubectl wait --for=condition=ready pod -l app={{ item }} -n {{ infra_namespace }} --timeout=180s
+      loop: [postgres, redis, zookeeper, kafka]
+      ignore_errors: yes
+
+    - name: Deploy platform services
+      command: kubectl apply -f {{ k8s_dir }}/{{ item }}
+      loop:
+        - keycloak.yaml
+        - monitoring.yaml
+        - elk.yaml
+        - jenkins.yaml
+        - sonarqube.yaml
+        - nexus.yaml
+        - gitlab.yaml
+        - ingress.yaml
+      register: result
+      changed_when: "'created' in result.stdout or 'configured' in result.stdout"
+
+    - name: Wait for platform services
+      command: kubectl wait --for=condition=ready pod -l app={{ item }} -n {{ infra_namespace }} --timeout=300s
+      loop: [keycloak, jenkins, elasticsearch, kibana, gitlab]
+      ignore_errors: yes
+
+    - name: Display status
+      command: kubectl get pods -n {{ infra_namespace }} --no-headers
+      register: pods
+    - debug:
+        msg: "{{ pods.stdout_lines }}"

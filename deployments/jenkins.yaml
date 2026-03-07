@@ -1,0 +1,228 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-agent
+  namespace: infrastructure
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jenkins-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: jenkins-agent
+  namespace: infrastructure
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-maven-cache
+  namespace: infrastructure
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-npm-cache
+  namespace: infrastructure
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-home
+  namespace: infrastructure
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins
+  namespace: infrastructure
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jenkins
+  template:
+    metadata:
+      labels:
+        app: jenkins
+    spec:
+      serviceAccountName: jenkins-agent
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      containers:
+      - name: jenkins
+        image: jenkins/jenkins:lts
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 50000
+          name: agent
+        volumeMounts:
+        - name: jenkins-home
+          mountPath: /var/jenkins_home
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+      volumes:
+      - name: jenkins-home
+        persistentVolumeClaim:
+          claimName: jenkins-home
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins
+  namespace: infrastructure
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+    - port: 50000
+      targetPort: 50000
+      name: agent
+  selector:
+    app: jenkins
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jenkins-maven-settings
+  namespace: infrastructure
+data:
+  settings.xml: |
+    <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+      <!-- Credentials for Nexus -->
+      <!--
+        Note: The default admin password in Nexus is generated in /nexus-data/admin.password
+        You must retrieve it, change the password, and update it here.
+      -->
+      <servers>
+        <server>
+          <id>central</id>
+          <username>admin</username>
+          <password>admin123</password>
+        </server>
+        <server>
+          <id>snapshots</id>
+          <username>admin</username>
+          <password>admin123</password>
+        </server>
+        <server>
+          <id>nexus-releases</id>
+          <username>admin</username>
+          <password>admin123</password>
+        </server>
+        <server>
+          <id>nexus-snapshots</id>
+          <username>admin</username>
+          <password>admin123</password>
+        </server>
+      </servers>
+
+      <!--
+        Note: Mirrors are commented out by default.
+        Uncomment after configuring Nexus repositories (maven-public group)
+      -->
+      <!--
+      <mirrors>
+        <mirror>
+          <id>nexus-maven-central</id>
+          <mirrorOf>*</mirrorOf>
+          <url>http://nexus.infrastructure.svc.cluster.local:8081/repository/maven-public/</url>
+        </mirror>
+      </mirrors>
+      -->
+
+      <profiles>
+        <profile>
+          <id>nexus</id>
+          <repositories>
+            <repository>
+              <snapshots>
+                <enabled>false</enabled>
+              </snapshots>
+              <id>central</id>
+              <name>nexus-releases</name>
+              <url>http://nexus.infrastructure.svc.cluster.local:8081/repository/maven-public/</url>
+            </repository>
+            <repository>
+              <snapshots />
+              <id>snapshots</id>
+              <name>nexus-snapshots</name>
+              <url>http://nexus.infrastructure.svc.cluster.local:8081/repository/maven-public/</url>
+            </repository>
+          </repositories>
+          <pluginRepositories>
+            <pluginRepository>
+              <snapshots>
+                <enabled>false</enabled>
+              </snapshots>
+              <id>central</id>
+              <name>nexus-releases</name>
+              <url>http://nexus.infrastructure.svc.cluster.local:8081/repository/maven-public/</url>
+            </pluginRepository>
+            <pluginRepository>
+              <snapshots />
+              <id>snapshots</id>
+              <name>nexus-snapshots</name>
+              <url>http://nexus.infrastructure.svc.cluster.local:8081/repository/maven-public/</url>
+            </pluginRepository>
+          </pluginRepositories>
+        </profile>
+      </profiles>
+      <!--
+        Note: The profile is active by default but relies on Nexus repositories existing.
+        If Nexus is down or unconfigured, builds may fail.
+      -->
+      <!--
+      <activeProfiles>
+        <activeProfile>nexus</activeProfile>
+      </activeProfiles>
+      -->
+    </settings>
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jenkins-npm-config
+  namespace: infrastructure
+data:
+  .npmrc: |
+    # Configure this after setting up an NPM Group repository in Nexus
+    # registry=http://nexus.infrastructure.svc.cluster.local:8081/repository/npm-group/
+    # _auth=YWRtaW46YWRtaW4xMjM=
+    # always-auth=true
