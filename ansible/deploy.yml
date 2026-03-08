@@ -107,6 +107,11 @@
       register: result
       changed_when: "'created' in result.stdout or 'configured' in result.stdout"
 
+    - name: Install descheduler addon resources (manual run mode)
+      command: kubectl apply -f {{ k8s_dir }}/descheduler.yaml
+      register: result
+      changed_when: "'created' in result.stdout or 'configured' in result.stdout"
+
     - name: Wait for platform services
       command: kubectl wait --for=condition=ready pod -l app={{ item }} -n {{ infra_namespace }} --timeout=300s
       loop: [keycloak, jenkins, elasticsearch, kibana, gitlab]

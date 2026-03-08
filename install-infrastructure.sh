@@ -162,6 +162,7 @@ ask_with_default "Install/upgrade NGINX ingress controller?" "Y" && INSTALL_INGR
 ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
 ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
 ask_with_default "Deploy/upgrade platform services (Keycloak, monitoring, ELK, Jenkins, SonarQube, Nexus, GitLab, ingress rules)?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
+ask_with_default "Install/upgrade Descheduler addon resources (manual trigger only)?" "Y" && INSTALL_DESCHEDULER=true || INSTALL_DESCHEDULER=false
 ask_with_default "Install/upgrade ArgoCD?" "Y" && INSTALL_ARGOCD=true || INSTALL_ARGOCD=false
 
 if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" && "$DEPLOY_DATA_STORES" != "true" ]]; then
@@ -175,7 +176,7 @@ if [[ "$DEPLOY_DATA_STORES" == "true" && "$INSTALL_VAULT_STACK" != "true" ]]; th
 fi
 
 RUN_K8S_FEATURES=false
-if [[ "$INSTALL_K3S" == "true" || "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_DATA_STORES" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
+if [[ "$INSTALL_K3S" == "true" || "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_DATA_STORES" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$INSTALL_DESCHEDULER" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
     RUN_K8S_FEATURES=true
 fi
 
@@ -388,6 +389,11 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl wait --for=condition=ready pod -l app=gitlab         -n infrastructure --timeout=900s 2>/dev/null || warn "GitLab still starting..."
     fi
 
+    if [[ "$INSTALL_DESCHEDULER" == "true" ]]; then
+        step "Installing Descheduler addon resources (manual-run mode)..."
+        kubectl apply -f "$DEPLOY_DIR/descheduler.yaml"
+    fi
+
     if [[ "$INSTALL_ARGOCD" == "true" ]]; then
         step "Installing ArgoCD..."
         if helm list -n infrastructure 2>/dev/null | grep -q argocd; then
@@ -452,6 +458,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     echo "  GitLab:   kubectl exec -n infrastructure deployment/gitlab -- grep 'Password:' /etc/gitlab/initial_root_password"
     echo "  MongoDB:  kubectl get secret -n infrastructure mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"
     echo "  Vault:    kubectl get secret -n infrastructure vault-init -o jsonpath='{.data.root_token}' | base64 -d"
+    echo "  Descheduler trigger: kubectl create -f deployments/descheduler-run-job.yaml"
     echo ""
 
     echo "Pod status:"

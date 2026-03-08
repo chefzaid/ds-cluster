@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: descheduler-manual-
+  namespace: infrastructure
+  labels:
+    app: descheduler
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: descheduler
+    spec:
+      serviceAccountName: descheduler
+      restartPolicy: Never
+      containers:
+        - name: descheduler
+          image: registry.k8s.io/descheduler/descheduler:v0.31.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/descheduler
+          args:
+            - --policy-config-file=/policy-dir/policy.yaml
+            - --v=2
+          volumeMounts:
+            - name: policy-volume
+              mountPath: /policy-dir
+      volumes:
+        - name: policy-volume
+          configMap:
+            name: descheduler-policy

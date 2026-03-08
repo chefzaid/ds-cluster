@@ -16,6 +16,7 @@ Infrastructure repository Dedicated Server (DS) cluster. It owns cluster prerequ
 *   **Source Control**: GitLab
 *   **Monitoring**: Prometheus, Grafana
 *   **Logging**: ELK Stack (Elasticsearch, Logstash, Kibana)
+*   **Cluster Maintenance**: Kubernetes Descheduler (manual trigger mode)
 *   **NoSQL Database**: MongoDB
 *   **Secrets Management**: HashiCorp Vault + External Secrets Operator
 *   **Automation**: Ansible
@@ -85,7 +86,7 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 
 | Namespace | Contents |
 |-----------|----------|
-| `infrastructure` | PostgreSQL, MongoDB, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Vault, External Secrets Operator, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana) |
+| `infrastructure` | PostgreSQL, MongoDB, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Vault, External Secrets Operator, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana), Descheduler addon |
 | `application` | Application services (owned/deployed from the application repo) |
 | `longhorn-system` | Longhorn storage manager |
 
@@ -105,7 +106,7 @@ chmod +x scripts/configure-vault.sh scripts/configure-node-security.sh
 ./install-infrastructure.sh
 ```
 
-The installer now prompts feature-by-feature (prereqs, K3s, Longhorn, security baseline, ingress, Vault/ESO, data stores, platform services, ArgoCD) so you can install only what is needed.
+The installer now prompts feature-by-feature (prereqs, K3s, Longhorn, security baseline, ingress, Vault/ESO, data stores, platform services, Descheduler addon, ArgoCD) so you can install only what is needed.
 
 ### Manual Installation
 
@@ -179,6 +180,9 @@ kubectl apply -f deployments/vault-secrets.yaml
 for f in postgres kafka redis mongodb keycloak monitoring elk jenkins sonarqube nexus gitlab ingress; do
     kubectl apply -f deployments/${f}.yaml
 done
+
+# Install descheduler addon resources (policy + RBAC only, no automatic run)
+kubectl apply -f deployments/descheduler.yaml
 ```
 
 #### 6. Install ArgoCD (Helm)
@@ -292,6 +296,19 @@ Use this table for first-time setup credentials for every service that requires 
 | GitLab | `root` | `kubectl exec -n infrastructure deployment/gitlab -- awk '/Password:/ {print $2}' /etc/gitlab/initial_root_password` | Initial file can expire/rotate; set a permanent password. |
 | ArgoCD | `admin` | `base64 --decode <<< "$(kubectl -n infrastructure get secret argocd-initial-admin-secret -o jsonpath='{.data.password}')" && echo` | Delete/rotate initial secret after onboarding. |
 | SonarQube | `admin` | `admin` | Default bootstrap credentials are static; change immediately after first login. |
+
+### 8. Trigger Descheduler Manually
+
+Descheduler is installed in **manual trigger mode only** (no CronJob and no always-running Deployment).  
+Configured strategies: `LowNodeUtilization` and `RemoveDuplicates`.
+
+```bash
+# Launch a one-off descheduler run
+kubectl create -f deployments/descheduler-run-job.yaml
+
+# Watch completion
+kubectl get jobs -n infrastructure -l app=descheduler -w
+```
 
 ## 🔀 Adding More Nodes
 
