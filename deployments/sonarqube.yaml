@@ -47,20 +47,6 @@ spec:
     requests:
       storage: 10Gi
 
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: sonarqube-db-credentials
-  namespace: infrastructure
-type: Opaque
-stringData:
-  # In a production environment, use a secure secret manager or external secrets.
-  # For local development, these are acceptable.
-  postgresql-password: sonar
-  jdbc-password: sonar
-
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:

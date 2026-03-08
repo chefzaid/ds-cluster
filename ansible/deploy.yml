@@ -6,12 +6,77 @@
   vars:
     infra_namespace: "{{ infra_ns | default('infrastructure') }}"
     k8s_dir: "{{ playbook_dir }}/../deployments"
+    apply_firewall_hardening: "{{ harden_firewall | default(true) }}"
 
   tasks:
     - name: Ensure namespaces exist
-      command: kubectl create namespace {{ item }} --dry-run=client -o yaml | kubectl apply -f -
+      shell: kubectl create namespace {{ item }} --dry-run=client -o yaml | kubectl apply -f -
       loop:
         - "{{ infra_namespace }}"
+
+    - name: Apply host firewall hardening baseline
+      command: "{{ playbook_dir }}/../scripts/configure-node-security.sh --apply"
+      when: apply_firewall_hardening | bool
+
+    - name: Add Helm repositories
+      shell: |
+        helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
+        helm repo add external-secrets https://charts.external-secrets.io 2>/dev/null || true
+        helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx 2>/dev/null || true
+        helm repo update >/dev/null 2>&1
+      changed_when: false
+
+    - name: Install or upgrade Vault
+      command: >
+        helm upgrade --install vault hashicorp/vault
+        --namespace {{ infra_namespace }}
+        --set injector.enabled=false
+        --set server.ha.enabled=true
+        --set server.ha.raft.enabled=true
+        --set server.ha.replicas=1
+        --set server.dataStorage.storageClass=longhorn
+        --wait --timeout 300s
+
+    - name: Install or upgrade External Secrets Operator
+      command: >
+        helm upgrade --install external-secrets external-secrets/external-secrets
+        --namespace {{ infra_namespace }}
+        --set installCRDs=true
+        --wait --timeout 300s
+
+    - name: Apply Vault ingress and RBAC
+      command: kubectl apply -f {{ k8s_dir }}/vault.yaml
+      register: result
+      changed_when: "'created' in result.stdout or 'configured' in result.stdout"
+
+    - name: Wait for Vault pod phase running
+      command: kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n {{ infra_namespace }} --timeout=300s
+      ignore_errors: yes
+
+    - name: Wait for External Secrets controller
+      command: kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=external-secrets -n {{ infra_namespace }} --timeout=300s
+      ignore_errors: yes
+
+    - name: Bootstrap Vault auth, policies, and seed secrets
+      command: "{{ playbook_dir }}/../scripts/configure-vault.sh {{ infra_namespace }}"
+
+    - name: Apply Vault-backed ExternalSecret resources
+      command: kubectl apply -f {{ k8s_dir }}/vault-secrets.yaml
+      register: result
+      changed_when: "'created' in result.stdout or 'configured' in result.stdout"
+
+    - name: Wait for ExternalSecret reconciliation
+      command: kubectl wait --for=condition=Ready externalsecret/{{ item }} -n {{ infra_namespace }} --timeout=180s
+      loop:
+        - postgres-secret
+        - mongodb-secret
+        - sonarqube-db-credentials
+        - grafana-admin-secret
+        - keycloak-admin-secret
+        - keycloak-realm-config
+        - jenkins-maven-settings
+        - jenkins-npm-config
+      ignore_errors: yes
 
     - name: Deploy data stores
       command: kubectl apply -f {{ k8s_dir }}/{{ item }}
@@ -50,5 +115,6 @@
     - name: Display status
       command: kubectl get pods -n {{ infra_namespace }} --no-headers
       register: pods
+
     - debug:
         msg: "{{ pods.stdout_lines }}"

@@ -17,15 +17,16 @@ Infrastructure repository Dedicated Server (DS) cluster. It owns cluster prerequ
 *   **Monitoring**: Prometheus, Grafana
 *   **Logging**: ELK Stack (Elasticsearch, Logstash, Kibana)
 *   **NoSQL Database**: MongoDB
+*   **Secrets Management**: HashiCorp Vault + External Secrets Operator
 *   **Automation**: Ansible
 
 > **Note on Nexus**:
 >
-> *   ConfigMaps for `settings.xml` and `.npmrc` are deployed for Jenkins agents, but mirroring is disabled by default.
+> *   Jenkins Maven/NPM credentials are now sourced from Vault (`secret/infrastructure/jenkins`) and synced through External Secrets.
 > *   **Setup Required**:
 >     1.  Login to Nexus (`https://nexus.swirlit.dev`), retrieve admin password: `kubectl exec -n infrastructure deployment/nexus -- cat /nexus-data/admin.password`
 >     2.  Create repositories: Maven `maven-public` (Group proxying Central), NPM `npm-group`, Docker hosted on port 5000.
->     3.  Update Jenkins ConfigMaps with credentials and uncomment Nexus mirror configuration.
+>     3.  Update Vault secret `secret/infrastructure/jenkins` with correct Nexus credentials and allow External Secrets to refresh.
 
 ## 🏗 Infrastructure Architecture
 
@@ -33,8 +34,14 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 
 ### Traffic Flow (Platform View)
 1.  **Client/Browser** connects to **Nginx Ingress Controller** over HTTPS.
-2.  Ingress routes infrastructure hosts (Keycloak, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Grafana, Kibana, Longhorn).
+2.  Ingress routes infrastructure hosts (Keycloak, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Grafana, Kibana, Longhorn, Vault).
 3.  App traffic routing and app workload manifests are owned by the application repository.
+
+### Secrets Flow (Vault)
+1. Vault stores infrastructure secrets under `secret/infrastructure/*`.
+2. External Secrets Operator authenticates to Vault using Kubernetes auth.
+3. `ExternalSecret` resources sync Vault values into namespace-scoped Kubernetes Secrets consumed by workloads.
+4. No credential values are stored in repository YAML.
 
 ### Centralized Logging (ELK Stack)
 *   **Logstash** collects logs from:
@@ -52,21 +59,22 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 
 #### Infrastructure Services
 
-| Service | Endpoint (Domain **or** IP:Port) | Access | Use |
-|---------|----------------------------------|--------|-----|
+| Service | Endpoint | Access | Use |
+|---------|----------|--------|-----|
 | **GitLab** | `https://gitlab.swirlit.dev` | Public | Source code hosting and Git remote (`root` + initial password from pod) |
 | **Jenkins** | `https://jenkins.swirlit.dev` | Public | CI/CD pipelines |
 | **ArgoCD** | `https://argocd.swirlit.dev` | Public | GitOps sync and app delivery |
 | **Nexus** | `https://nexus.swirlit.dev` | Public | Artifact repository |
 | **SonarQube** | `https://sonarqube.swirlit.dev` | Public | Code quality and static analysis |
-| **Keycloak** | `https://keycloak.swirlit.dev` | Public | OIDC provider (admin/admin by default) |
+| **Keycloak** | `https://keycloak.swirlit.dev` | Public | OIDC provider (admin credential from Vault) |
 | **Grafana** | `https://grafana.swirlit.dev` | Public | Dashboards and monitoring UI |
 | **Kibana** | `https://kibana.swirlit.dev` | Public | Log search and visualization |
 | **Longhorn UI** | `https://longhorn.swirlit.dev` | Public | Persistent volume management |
-| **PostgreSQL** | `10.43.129.209:5432` | Internal | Primary DB for user-app, order-app, and Keycloak |
+| **Vault** | `https://vault.swirlit.dev` | Public | Secrets manager (source of truth for infrastructure credentials) |
+| **PostgreSQL** | `10.43.129.209:5432` | Internal | Primary DB, also used for Keycloak |
 | **MongoDB** | `mongodb.infrastructure.svc.cluster.local:27017` | Internal | Document database for infrastructure/application workloads |
 | **Redis** | `10.43.206.215:6379` | Internal | Cache backend for application services |
-| **Kafka** | `kafka.infrastructure.svc.cluster.local:9092` | Internal | Event bus for order saga events |
+| **Kafka** | `kafka.infrastructure.svc.cluster.local:9092` | Internal | Event bus |
 | **Zookeeper** | `zookeeper.infrastructure.svc.cluster.local:2181` | Internal | Coordination service for Kafka |
 | **Elasticsearch** | `10.43.167.56:9200` | Internal | Log storage/indexing backend |
 | **Logstash** | `10.43.57.31:5000` | Internal | Log/event ingestion pipeline |
@@ -77,7 +85,7 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 
 | Namespace | Contents |
 |-----------|----------|
-| `infrastructure` | PostgreSQL, MongoDB, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana) |
+| `infrastructure` | PostgreSQL, MongoDB, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Vault, External Secrets Operator, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana) |
 | `application` | Application services (owned/deployed from the application repo) |
 | `longhorn-system` | Longhorn storage manager |
 
@@ -93,18 +101,27 @@ Use the combined one-click script:
 
 ```bash
 chmod +x install-infrastructure.sh
+chmod +x scripts/configure-vault.sh scripts/configure-node-security.sh
 ./install-infrastructure.sh
 ```
+
+The installer now prompts feature-by-feature (prereqs, K3s, Longhorn, security baseline, ingress, Vault/ESO, data stores, platform services, ArgoCD) so you can install only what is needed.
 
 ### Manual Installation
 
 #### 1. Install System Dependencies
 ```bash
-sudo apt install -y openjdk-21-jdk maven docker.io ansible open-iscsi nfs-common curl jq
+sudo apt install -y openjdk-21-jdk maven docker.io ansible open-iscsi nfs-common curl jq openssl
 curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt install -y nodejs
 sudo usermod -aG docker $USER
 sudo systemctl enable --now iscsid
+```
+
+#### 1.1 Apply Host Firewall Hardening (Recommended)
+```bash
+chmod +x scripts/configure-node-security.sh
+./scripts/configure-node-security.sh --apply
 ```
 
 #### 2. Install Kubernetes
@@ -140,8 +157,27 @@ kubectl create namespace infrastructure
 # Create TLS secret for infrastructure ingress
 kubectl create secret tls swirlit-dev-tls --cert=tls.crt --key=tls.key -n infrastructure --dry-run=client -o yaml | kubectl apply -f -
 
+# Install Vault
+helm repo add hashicorp https://helm.releases.hashicorp.com
+helm upgrade --install vault hashicorp/vault -n infrastructure \
+    --set injector.enabled=false \
+    --set server.ha.enabled=true \
+    --set server.ha.raft.enabled=true \
+    --set server.ha.replicas=1 \
+    --set server.dataStorage.storageClass=longhorn
+kubectl apply -f deployments/vault.yaml
+
+# Install External Secrets Operator
+helm repo add external-secrets https://charts.external-secrets.io
+helm upgrade --install external-secrets external-secrets/external-secrets -n infrastructure --set installCRDs=true
+
+# Configure Vault and seed secret values
+chmod +x scripts/configure-vault.sh
+./scripts/configure-vault.sh infrastructure
+kubectl apply -f deployments/vault-secrets.yaml
+
 for f in postgres kafka redis mongodb keycloak monitoring elk jenkins sonarqube nexus gitlab ingress; do
-    kubectl apply -f ${f}.yaml
+    kubectl apply -f deployments/${f}.yaml
 done
 ```
 
@@ -170,12 +206,13 @@ Create these DNS records in your Cloudflare zone, all pointing to `51.68.232.240
 | A | `grafana` | `51.68.232.240` | Proxied |
 | A | `kibana` | `51.68.232.240` | Proxied |
 | A | `longhorn` | `51.68.232.240` | Proxied |
+| A | `vault` | `51.68.232.240` | Proxied |
 
 ### 2. Replace Temporary Self-Signed Cert with Cloudflare Origin Certificate
 The scripts create `swirlit-dev-tls` automatically with a self-signed cert. Replace it with Cloudflare Origin cert:
 
 1. Cloudflare Dashboard → **SSL/TLS** → **Origin Server** → **Create Certificate**
-2. Hostnames: `keycloak.swirlit.dev`, `jenkins.swirlit.dev`, `sonarqube.swirlit.dev`, `nexus.swirlit.dev`, `gitlab.swirlit.dev`, `argocd.swirlit.dev`, `grafana.swirlit.dev`, `kibana.swirlit.dev`, `longhorn.swirlit.dev`, `*.swirlit.dev`
+2. Hostnames: `keycloak.swirlit.dev`, `jenkins.swirlit.dev`, `sonarqube.swirlit.dev`, `nexus.swirlit.dev`, `gitlab.swirlit.dev`, `argocd.swirlit.dev`, `grafana.swirlit.dev`, `kibana.swirlit.dev`, `longhorn.swirlit.dev`, `vault.swirlit.dev`, `*.swirlit.dev`
 3. Save certificate and private key as local files (`tls.crt`, `tls.key`)
 4. Apply them:
 
@@ -225,38 +262,63 @@ kubectl -n infrastructure get secret argocd-initial-admin-secret -o jsonpath="{.
 # ArgoCD auto-syncs on git push (self-heal enabled)
 ```
 
-### 6. Change Default Passwords (Security)
+### 6. Rotate Infrastructure Secrets in Vault (Security)
 ```bash
-# PostgreSQL: Update secret in postgres.yaml (base64 encoded)
-# Change before production use!
-echo -n 'YOUR_NEW_PASSWORD' | base64
+# Read Vault root token (created by scripts/configure-vault.sh)
+export VAULT_TOKEN="$(kubectl get secret -n infrastructure vault-init -o jsonpath='{.data.root_token}' | base64 -d)"
+export VAULT_ADDR="http://127.0.0.1:8200"
+kubectl port-forward -n infrastructure svc/vault-ui 8200:8200
 
-# MongoDB: Update root username/password in mongodb.yaml (base64 encoded)
-# Change before production use!
-echo -n 'YOUR_NEW_MONGODB_PASSWORD' | base64
-
-# Keycloak admin password: Update KEYCLOAK_ADMIN_PASSWORD in keycloak.yaml
-# SonarQube: Change admin password on first login
-# Grafana: Change admin password on first login
-# Nexus: Retrieve and change on first login
+# Rotate examples (run in another terminal with VAULT_ADDR/VAULT_TOKEN set)
+vault kv patch secret/infrastructure/postgres username='<NEW_USERNAME>' password='<NEW_PASSWORD>'
+vault kv patch secret/infrastructure/mongodb root_password='<NEW_PASSWORD>'
+vault kv patch secret/infrastructure/grafana admin_password='<NEW_PASSWORD>'
+vault kv patch secret/infrastructure/keycloak admin_password='<NEW_PASSWORD>'
 ```
+
+### 7. Initial Credential Retrieval (Per Service)
+
+Use this table for first-time setup credentials for every service that requires authentication:
+
+| Service | Username (first login) | Password / Token retrieval | Notes |
+|---|---|---|---|
+| Vault | `root` token only | `base64 --decode <<< "$(kubectl get secret -n infrastructure vault-init -o jsonpath='{.data.root_token}')" && echo` | Use token to login, create scoped tokens, then stop using root token. |
+| PostgreSQL | `base64 --decode <<< "$(kubectl get secret -n infrastructure postgres-secret -o jsonpath='{.data.POSTGRES_USER}')" && echo` | `base64 --decode <<< "$(kubectl get secret -n infrastructure postgres-secret -o jsonpath='{.data.POSTGRES_PASSWORD}')" && echo` | Vault-backed via External Secrets. |
+| MongoDB | `base64 --decode <<< "$(kubectl get secret -n infrastructure mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_USERNAME}')" && echo` | `base64 --decode <<< "$(kubectl get secret -n infrastructure mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}')" && echo` | Vault-backed via External Secrets. |
+| Keycloak | `base64 --decode <<< "$(kubectl get secret -n infrastructure keycloak-admin-secret -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_USERNAME}')" && echo` | `base64 --decode <<< "$(kubectl get secret -n infrastructure keycloak-admin-secret -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}')" && echo` | Rotate after first login. |
+| Grafana | `admin` | `base64 --decode <<< "$(kubectl get secret -n infrastructure grafana-admin-secret -o jsonpath='{.data.GF_SECURITY_ADMIN_PASSWORD}')" && echo` | Vault-backed via External Secrets. |
+| Jenkins | `admin` | `kubectl exec -n infrastructure deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword` | Password is generated by Jenkins on first startup. |
+| Nexus | `admin` | `kubectl exec -n infrastructure deployment/nexus -- cat /nexus-data/admin.password` | Password file exists until changed. |
+| GitLab | `root` | `kubectl exec -n infrastructure deployment/gitlab -- awk '/Password:/ {print $2}' /etc/gitlab/initial_root_password` | Initial file can expire/rotate; set a permanent password. |
+| ArgoCD | `admin` | `base64 --decode <<< "$(kubectl -n infrastructure get secret argocd-initial-admin-secret -o jsonpath='{.data.password}')" && echo` | Delete/rotate initial secret after onboarding. |
+| SonarQube | `admin` | `admin` | Default bootstrap credentials are static; change immediately after first login. |
 
 ## 🔀 Adding More Nodes
 
 K8s makes it easy to scale horizontally:
 
 ```bash
+# On the master node, get control-plane IP:
+hostname -I | awk '{print $1}'
+
 # On the master node, get the join token:
 sudo cat /var/lib/rancher/k3s/server/node-token
 
 # On the new worker node:
-curl -sfL https://get.k3s.io | K3S_URL=https://<MASTER_IP>:6443 K3S_TOKEN=<TOKEN> sh -
+curl -sfL https://get.k3s.io | K3S_URL=https://<MASTER_NODE_IP>:6443 K3S_TOKEN=<TOKEN_FROM_MASTER> sh -
 
 # Longhorn will automatically replicate data to new nodes.
 # Increase replica count:
 kubectl edit settings -n longhorn-system default-replica-count
 # Change from 1 to 2 (or 3 for 3+ nodes)
 ```
+
+## 🔒 Host Security Baseline
+
+- UFW firewall baseline is supported via `scripts/configure-node-security.sh` and should be enabled on every node.
+- Keep only required public ports open (`22`, `80`, `443`, `6443`, plus node-internal overlay ports).
+- Rotate Vault-stored secrets regularly and restart workloads that consume rotated credentials.
+- Keep Kubernetes/Helm chart versions updated and avoid running long-lived default credentials.
 
 ## 📊 Monitoring & Logging
 

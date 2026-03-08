@@ -7,6 +7,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$SCRIPT_DIR/deployments"
+VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
+SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
 AUTO_APPROVE=false
 SERVER_IP="${SERVER_IP:-51.68.232.240}"
 
@@ -34,22 +36,24 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 step()  { echo -e "${BLUE}[STEP]${NC}  $*"; }
 
-ask() {
+ask_with_default() {
     local prompt="$1"
-    if [[ "$AUTO_APPROVE" == "true" ]]; then
-        info "Auto-approve enabled: $prompt"
-        return 0
-    fi
-    read -rp "$(echo -e "${YELLOW}$prompt [y/N]${NC} ")" answer
-    [[ "$answer" =~ ^[Yy]$ ]]
-}
+    local default_choice="${2:-N}"
+    local answer="" suffix=""
 
-ask_default_no() {
-    local prompt="$1"
-    if [[ "$AUTO_APPROVE" == "true" ]]; then
-        return 1
+    if [[ "$default_choice" == "Y" ]]; then
+        suffix="[Y/n]"
+    else
+        suffix="[y/N]"
     fi
-    read -rp "$(echo -e "${YELLOW}$prompt [y/N]${NC} ")" answer
+
+    if [[ "$AUTO_APPROVE" == "true" ]]; then
+        [[ "$default_choice" == "Y" ]]
+        return
+    fi
+
+    read -rp "$(echo -e "${YELLOW}$prompt $suffix${NC} ")" answer
+    answer="${answer:-$default_choice}"
     [[ "$answer" =~ ^[Yy]$ ]]
 }
 
@@ -115,6 +119,7 @@ check_dns_records() {
         "kibana.swirlit.dev"
         "gitlab.swirlit.dev"
         "longhorn.swirlit.dev"
+        "vault.swirlit.dev"
     )
 
     for host in "${hosts[@]}"; do
@@ -134,176 +139,278 @@ info " Infrastructure Installer"
 info "============================================="
 echo ""
 echo "This script will:"
-echo "  1. Install prerequisites (Java, Maven, Node.js, Docker, Ansible, K3s, Helm, Longhorn)"
-echo "  2. Deploy infrastructure services (ingress, data, IAM, monitoring, logging, CI/CD, GitOps)"
+echo "  - Prompt you for each install feature group one by one"
+echo "  - Install only selected components"
+echo "  - Run Vault bootstrap and node security scripts only when selected"
 echo ""
 
-ask "Proceed with installation and deployment?" || { info "Aborted."; exit 0; }
+ask_with_default "Proceed with installation and deployment?" "Y" || { info "Aborted."; exit 0; }
+
+step "Select features to install (answer each prompt)"
+if command -v k3s &>/dev/null; then
+    warn "K3s detected: $(k3s --version | head -1)"
+    K3S_DEFAULT="N"
+else
+    K3S_DEFAULT="Y"
+fi
+
+ask_with_default "Install/upgrade system prerequisites (Java/Maven/Docker/Ansible/Node/etc.)?" "Y" && INSTALL_PREREQS=true || INSTALL_PREREQS=false
+ask_with_default "Install or reinstall K3s control plane?" "$K3S_DEFAULT" && INSTALL_K3S=true || INSTALL_K3S=false
+ask_with_default "Install/upgrade Longhorn and make it default storage class?" "Y" && INSTALL_LONGHORN=true || INSTALL_LONGHORN=false
+ask_with_default "Apply node firewall hardening baseline now?" "N" && APPLY_FIREWALL=true || APPLY_FIREWALL=false
+ask_with_default "Install/upgrade NGINX ingress controller?" "Y" && INSTALL_INGRESS=true || INSTALL_INGRESS=false
+ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
+ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
+ask_with_default "Deploy/upgrade platform services (Keycloak, monitoring, ELK, Jenkins, SonarQube, Nexus, GitLab, ingress rules)?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
+ask_with_default "Install/upgrade ArgoCD?" "Y" && INSTALL_ARGOCD=true || INSTALL_ARGOCD=false
+
+if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" && "$DEPLOY_DATA_STORES" != "true" ]]; then
+    warn "Platform services depend on data stores; enabling data store deployment."
+    DEPLOY_DATA_STORES=true
+fi
+
+if [[ "$DEPLOY_DATA_STORES" == "true" && "$INSTALL_VAULT_STACK" != "true" ]]; then
+    warn "Data stores require Vault-synced secrets; enabling Vault + External Secrets install."
+    INSTALL_VAULT_STACK=true
+fi
+
+RUN_K8S_FEATURES=false
+if [[ "$INSTALL_K3S" == "true" || "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_DATA_STORES" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
+    RUN_K8S_FEATURES=true
+fi
+
+NEEDS_HELM=false
+if [[ "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
+    NEEDS_HELM=true
+fi
 
 # ---------- Prerequisites section ----------------------------------------------
-step "Installing system prerequisites..."
-sudo apt-get update -qq
-sudo apt-get install -y -qq \
-    openjdk-21-jdk \
-    maven \
-    docker.io \
-    ansible \
-    open-iscsi \
-    nfs-common \
-    curl \
-    jq \
-    git \
-    > /dev/null
+if [[ "$INSTALL_PREREQS" == "true" ]]; then
+    step "Installing system prerequisites..."
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq \
+        openjdk-21-jdk \
+        maven \
+        docker.io \
+        ansible \
+        open-iscsi \
+        nfs-common \
+        curl \
+        jq \
+        git \
+        openssl \
+        > /dev/null
 
-if ! command -v node &>/dev/null || [[ "$(node -v)" != v24* ]]; then
-    info "Installing Node.js 24..."
-    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - > /dev/null 2>&1
-    sudo apt-get install -y -qq nodejs > /dev/null
-fi
+    if ! command -v node &>/dev/null || [[ "$(node -v)" != v24* ]]; then
+        info "Installing Node.js 24..."
+        curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - > /dev/null 2>&1
+        sudo apt-get install -y -qq nodejs > /dev/null
+    fi
 
-if ! groups "$USER" | grep -q docker; then
-    info "Adding $USER to docker group (re-login required for non-sudo docker)..."
-    sudo usermod -aG docker "$USER"
-fi
+    if ! groups "$USER" | grep -q docker; then
+        info "Adding $USER to docker group (re-login required for non-sudo docker)..."
+        sudo usermod -aG docker "$USER"
+    fi
 
-sudo systemctl enable --now iscsid > /dev/null 2>&1
+    sudo systemctl enable --now iscsid > /dev/null 2>&1
 
-export MAVEN_OPTS="-Dhttp.proxyHost= -Dhttps.proxyHost="
-grep -q "MAVEN_OPTS" ~/.bashrc 2>/dev/null || \
-    echo 'export MAVEN_OPTS="-Dhttp.proxyHost= -Dhttps.proxyHost="' >> ~/.bashrc
-
-if command -v k3s &>/dev/null; then
-    warn "K3s already installed: $(k3s --version | head -1)"
-    ask_default_no "Reinstall K3s?" && INSTALL_K3S=true || INSTALL_K3S=false
+    export MAVEN_OPTS="-Dhttp.proxyHost= -Dhttps.proxyHost="
+    grep -q "MAVEN_OPTS" ~/.bashrc 2>/dev/null || \
+        echo 'export MAVEN_OPTS="-Dhttp.proxyHost= -Dhttps.proxyHost="' >> ~/.bashrc
 else
-    INSTALL_K3S=true
+    warn "Skipping system prerequisites."
 fi
 
-if [[ "$INSTALL_K3S" == "true" ]]; then
-    info "Installing K3s (disabling Traefik, using Nginx Ingress instead)..."
-    curl -sfL https://get.k3s.io | sh -s - \
-        --disable traefik \
-        --write-kubeconfig-mode 644
+if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
+    if [[ "$INSTALL_K3S" == "true" ]]; then
+        info "Installing K3s (disabling Traefik, using Nginx Ingress instead)..."
+        curl -sfL https://get.k3s.io | sh -s - \
+            --disable traefik \
+            --write-kubeconfig-mode 644
+    fi
 
-    mkdir -p ~/.kube
-    sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
-    sudo chown "$USER":"$USER" ~/.kube/config
-    export KUBECONFIG=~/.kube/config
+    if [[ -f /etc/rancher/k3s/k3s.yaml ]]; then
+        mkdir -p ~/.kube
+        sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+        sudo chown "$USER":"$USER" ~/.kube/config
+    fi
+    export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
     grep -q "KUBECONFIG" ~/.bashrc 2>/dev/null || \
         echo 'export KUBECONFIG=~/.kube/config' >> ~/.bashrc
-
-    kubectl wait --for=condition=Ready node --all --timeout=120s
 fi
 
-export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
-
-if ! command -v helm &>/dev/null; then
+if [[ "$NEEDS_HELM" == "true" ]] && ! command -v helm &>/dev/null; then
     info "Installing Helm 3..."
     curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash > /dev/null 2>&1
 fi
 
-if helm list -n longhorn-system 2>/dev/null | grep -q longhorn; then
-    warn "Longhorn already installed."
-else
-    info "Installing Longhorn..."
-    helm repo add longhorn https://charts.longhorn.io 2>/dev/null || true
-    helm repo update > /dev/null 2>&1
-
-    helm install longhorn longhorn/longhorn \
-        --namespace longhorn-system \
-        --create-namespace \
-        --set defaultSettings.defaultReplicaCount=1 \
-        --wait --timeout 300s
-
-    kubectl patch storageclass longhorn -p \
-        '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-    kubectl patch storageclass local-path -p \
-        '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true
-
-    kubectl wait --for=condition=ready pod -l app=longhorn-manager \
-        -n longhorn-system --timeout=180s
+if [[ "$APPLY_FIREWALL" == "true" ]]; then
+    if [[ -x "$SECURITY_HARDEN_SCRIPT" ]]; then
+        step "Applying host firewall hardening (UFW baseline)..."
+        "$SECURITY_HARDEN_SCRIPT" --apply
+    else
+        warn "Firewall hardening script not found at $SECURITY_HARDEN_SCRIPT"
+    fi
 fi
 
 # ---------- Infrastructure section ---------------------------------------------
-command -v kubectl &>/dev/null || error "kubectl not found after prerequisites."
-command -v helm &>/dev/null    || error "helm not found after prerequisites."
-command -v openssl &>/dev/null || error "openssl not found after prerequisites."
-kubectl cluster-info &>/dev/null || error "Cannot reach K8s cluster."
+if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
+    command -v kubectl &>/dev/null || error "kubectl not found."
+    command -v openssl &>/dev/null || error "openssl not found."
+    kubectl cluster-info &>/dev/null || error "Cannot reach K8s cluster."
+    [[ "$NEEDS_HELM" != "true" ]] || command -v helm &>/dev/null || error "helm not found."
 
-step "Creating infrastructure namespace..."
-kubectl create namespace infrastructure 2>/dev/null || true
+    if [[ "$INSTALL_K3S" == "true" ]]; then
+        kubectl wait --for=condition=Ready node --all --timeout=120s
+    fi
 
-step "Ensuring HTTPS TLS secret..."
-ensure_tls_secret infrastructure swirlit-dev-tls \
-    keycloak.swirlit.dev \
-    jenkins.swirlit.dev \
-    sonarqube.swirlit.dev \
-    nexus.swirlit.dev \
-    argocd.swirlit.dev \
-    grafana.swirlit.dev \
-    kibana.swirlit.dev \
-    gitlab.swirlit.dev \
-    longhorn.swirlit.dev
+    step "Creating infrastructure namespace..."
+    kubectl create namespace infrastructure 2>/dev/null || true
 
-step "Installing Nginx Ingress Controller..."
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx 2>/dev/null || true
-helm repo update > /dev/null 2>&1
-if helm list -n infrastructure 2>/dev/null | grep -q ingress-nginx; then
-    helm upgrade ingress-nginx ingress-nginx/ingress-nginx \
-        --namespace infrastructure \
-        --set controller.service.type=LoadBalancer \
-        --set controller.service.enableHttp=true \
-        --wait --timeout 120s
+    if [[ "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
+        step "Ensuring HTTPS TLS secret..."
+        ensure_tls_secret infrastructure swirlit-dev-tls \
+            keycloak.swirlit.dev \
+            jenkins.swirlit.dev \
+            sonarqube.swirlit.dev \
+            nexus.swirlit.dev \
+            argocd.swirlit.dev \
+            grafana.swirlit.dev \
+            kibana.swirlit.dev \
+            gitlab.swirlit.dev \
+            longhorn.swirlit.dev \
+            vault.swirlit.dev
+    fi
+
+    if [[ "$INSTALL_LONGHORN" == "true" ]]; then
+        if helm list -n longhorn-system 2>/dev/null | grep -q longhorn; then
+            warn "Longhorn already installed, keeping existing release."
+        else
+            step "Installing Longhorn..."
+            helm repo add longhorn https://charts.longhorn.io 2>/dev/null || true
+            helm repo update > /dev/null 2>&1
+            helm install longhorn longhorn/longhorn \
+                --namespace longhorn-system \
+                --create-namespace \
+                --set defaultSettings.defaultReplicaCount=1 \
+                --wait --timeout 300s
+        fi
+
+        kubectl patch storageclass longhorn -p \
+            '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+        kubectl patch storageclass local-path -p \
+            '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true
+        kubectl wait --for=condition=ready pod -l app=longhorn-manager \
+            -n longhorn-system --timeout=180s
+    fi
+
+    if [[ "$INSTALL_INGRESS" == "true" ]]; then
+        step "Installing Nginx Ingress Controller..."
+        helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx 2>/dev/null || true
+        helm repo update > /dev/null 2>&1
+        if helm list -n infrastructure 2>/dev/null | grep -q ingress-nginx; then
+            helm upgrade ingress-nginx ingress-nginx/ingress-nginx \
+                --namespace infrastructure \
+                --set controller.service.type=LoadBalancer \
+                --set controller.service.enableHttp=true \
+                --wait --timeout 120s
+        else
+            helm install ingress-nginx ingress-nginx/ingress-nginx \
+                --namespace infrastructure \
+                --set controller.service.type=LoadBalancer \
+                --set controller.service.enableHttp=true \
+                --wait --timeout 120s
+        fi
+    fi
+
+    if [[ "$INSTALL_VAULT_STACK" == "true" ]]; then
+        step "Installing HashiCorp Vault..."
+        helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
+        helm repo update > /dev/null 2>&1
+        helm upgrade --install vault hashicorp/vault \
+            --namespace infrastructure \
+            --set injector.enabled=false \
+            --set server.ha.enabled=true \
+            --set server.ha.raft.enabled=true \
+            --set server.ha.replicas=1 \
+            --set server.dataStorage.storageClass=longhorn \
+            --wait --timeout 300s
+
+        step "Installing External Secrets Operator..."
+        helm repo add external-secrets https://charts.external-secrets.io 2>/dev/null || true
+        helm repo update > /dev/null 2>&1
+        helm upgrade --install external-secrets external-secrets/external-secrets \
+            --namespace infrastructure \
+            --set installCRDs=true \
+            --wait --timeout 300s
+
+        step "Applying Vault access and secret-sync manifests..."
+        kubectl apply -f "$DEPLOY_DIR/vault.yaml"
+
+        kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infrastructure --timeout=300s
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=external-secrets -n infrastructure --timeout=180s
+
+        [[ -x "$VAULT_BOOTSTRAP_SCRIPT" ]] || chmod +x "$VAULT_BOOTSTRAP_SCRIPT"
+        step "Bootstrapping Vault auth/policies and seeding secrets..."
+        "$VAULT_BOOTSTRAP_SCRIPT" infrastructure
+
+        kubectl apply -f "$DEPLOY_DIR/vault-secrets.yaml"
+        for es in postgres-secret mongodb-secret sonarqube-db-credentials grafana-admin-secret keycloak-admin-secret keycloak-realm-config jenkins-maven-settings jenkins-npm-config; do
+            kubectl wait --for=condition=Ready externalsecret/"$es" -n infrastructure --timeout=180s 2>/dev/null || warn "ExternalSecret '$es' is still reconciling."
+        done
+    fi
+
+    if [[ "$DEPLOY_DATA_STORES" == "true" ]]; then
+        step "Deploying core data stores..."
+        kubectl apply -f "$DEPLOY_DIR/postgres.yaml"
+        kubectl apply -f "$DEPLOY_DIR/kafka.yaml"
+        kubectl apply -f "$DEPLOY_DIR/redis.yaml"
+        kubectl apply -f "$DEPLOY_DIR/mongodb.yaml"
+
+        kubectl wait --for=condition=ready pod -l app=postgres  -n infrastructure --timeout=180s
+        kubectl wait --for=condition=ready pod -l app=redis     -n infrastructure --timeout=120s
+        kubectl wait --for=condition=ready pod -l app=mongodb   -n infrastructure --timeout=180s
+        kubectl wait --for=condition=ready pod -l app=zookeeper -n infrastructure --timeout=180s
+        kubectl wait --for=condition=ready pod -l app=kafka     -n infrastructure --timeout=180s
+    fi
+
+    if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
+        step "Deploying platform services..."
+        for f in keycloak.yaml monitoring.yaml elk.yaml jenkins.yaml sonarqube.yaml nexus.yaml gitlab.yaml ingress.yaml; do
+            kubectl apply -f "$DEPLOY_DIR/$f"
+        done
+
+        kubectl wait --for=condition=ready pod -l app=keycloak      -n infrastructure --timeout=180s 2>/dev/null || warn "Keycloak still starting..."
+        kubectl wait --for=condition=ready pod -l app=jenkins        -n infrastructure --timeout=180s 2>/dev/null || warn "Jenkins still starting..."
+        kubectl wait --for=condition=ready pod -l app=elasticsearch  -n infrastructure --timeout=180s 2>/dev/null || warn "Elasticsearch still starting..."
+        kubectl wait --for=condition=ready pod -l app=kibana         -n infrastructure --timeout=180s 2>/dev/null || warn "Kibana still starting..."
+        kubectl wait --for=condition=ready pod -l app=logstash       -n infrastructure --timeout=180s 2>/dev/null || warn "Logstash still starting..."
+        kubectl wait --for=condition=ready pod -l app=gitlab         -n infrastructure --timeout=900s 2>/dev/null || warn "GitLab still starting..."
+    fi
+
+    if [[ "$INSTALL_ARGOCD" == "true" ]]; then
+        step "Installing ArgoCD..."
+        if helm list -n infrastructure 2>/dev/null | grep -q argocd; then
+            helm upgrade argocd argo/argo-cd \
+                --namespace infrastructure \
+                --set server.service.type=ClusterIP \
+                --set configs.params."server\\.insecure"=true \
+                --set redis.enabled=true \
+                --wait --timeout 300s
+        else
+            helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
+            helm repo update > /dev/null 2>&1
+            helm install argocd argo/argo-cd \
+                --namespace infrastructure \
+                --set server.service.type=ClusterIP \
+                --set configs.params."server\\.insecure"=true \
+                --set redis.enabled=true \
+                --wait --timeout 300s
+        fi
+    fi
 else
-    helm install ingress-nginx ingress-nginx/ingress-nginx \
-        --namespace infrastructure \
-        --set controller.service.type=LoadBalancer \
-        --set controller.service.enableHttp=true \
-        --wait --timeout 120s
+    warn "All Kubernetes feature groups were skipped."
 fi
-
-step "Deploying core data stores..."
-kubectl apply -f "$DEPLOY_DIR/postgres.yaml"
-kubectl apply -f "$DEPLOY_DIR/kafka.yaml"
-kubectl apply -f "$DEPLOY_DIR/redis.yaml"
-kubectl apply -f "$DEPLOY_DIR/mongodb.yaml"
-
-kubectl wait --for=condition=ready pod -l app=postgres  -n infrastructure --timeout=180s
-kubectl wait --for=condition=ready pod -l app=redis     -n infrastructure --timeout=120s
-kubectl wait --for=condition=ready pod -l app=mongodb   -n infrastructure --timeout=180s
-kubectl wait --for=condition=ready pod -l app=zookeeper -n infrastructure --timeout=180s
-kubectl wait --for=condition=ready pod -l app=kafka     -n infrastructure --timeout=180s
-
-step "Deploying platform services..."
-for f in keycloak.yaml monitoring.yaml elk.yaml jenkins.yaml sonarqube.yaml nexus.yaml gitlab.yaml ingress.yaml; do
-    kubectl apply -f "$DEPLOY_DIR/$f"
-done
-
-step "Installing ArgoCD..."
-if helm list -n infrastructure 2>/dev/null | grep -q argocd; then
-    helm upgrade argocd argo/argo-cd \
-        --namespace infrastructure \
-        --set server.service.type=ClusterIP \
-        --set configs.params."server\\.insecure"=true \
-        --set redis.enabled=true \
-        --wait --timeout 300s
-else
-    helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
-    helm repo update > /dev/null 2>&1
-    helm install argocd argo/argo-cd \
-        --namespace infrastructure \
-        --set server.service.type=ClusterIP \
-        --set configs.params."server\\.insecure"=true \
-        --set redis.enabled=true \
-        --wait --timeout 300s
-fi
-
-kubectl wait --for=condition=ready pod -l app=keycloak      -n infrastructure --timeout=180s 2>/dev/null || warn "Keycloak still starting..."
-kubectl wait --for=condition=ready pod -l app=jenkins        -n infrastructure --timeout=180s 2>/dev/null || warn "Jenkins still starting..."
-kubectl wait --for=condition=ready pod -l app=elasticsearch  -n infrastructure --timeout=180s 2>/dev/null || warn "Elasticsearch still starting..."
-kubectl wait --for=condition=ready pod -l app=kibana         -n infrastructure --timeout=180s 2>/dev/null || warn "Kibana still starting..."
-kubectl wait --for=condition=ready pod -l app=logstash       -n infrastructure --timeout=180s 2>/dev/null || warn "Logstash still starting..."
-kubectl wait --for=condition=ready pod -l app=gitlab         -n infrastructure --timeout=900s 2>/dev/null || warn "GitLab still starting..."
 
 info ""
 info "============================================="
@@ -312,35 +419,41 @@ info "============================================="
 
 echo ""
 echo "Installed versions:"
-echo "  Java: $(java -version 2>&1 | head -1)"
-echo "  Maven: $(mvn -version 2>&1 | head -1)"
-echo "  Node: $(node -v)"
-echo "  Docker: $(docker --version)"
-LONGHORN_VERSION="$(helm list -n longhorn-system -o json 2>/dev/null | jq -r '.[0].app_version // "unknown"')"
-echo "  Longhorn: ${LONGHORN_VERSION}"
+command -v java >/dev/null 2>&1 && echo "  Java: $(java -version 2>&1 | head -1)"
+command -v mvn >/dev/null 2>&1 && echo "  Maven: $(mvn -version 2>&1 | head -1)"
+command -v node >/dev/null 2>&1 && echo "  Node: $(node -v)"
+command -v docker >/dev/null 2>&1 && echo "  Docker: $(docker --version)"
+if command -v helm >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    LONGHORN_VERSION="$(helm list -n longhorn-system -o json 2>/dev/null | jq -r '.[0].app_version // "unknown"')"
+    echo "  Longhorn: ${LONGHORN_VERSION}"
+fi
 echo ""
-echo "Service access (HTTPS via domain):"
-echo "  Keycloak   https://keycloak.swirlit.dev"
-echo "  Jenkins    https://jenkins.swirlit.dev"
-echo "  SonarQube  https://sonarqube.swirlit.dev"
-echo "  Grafana    https://grafana.swirlit.dev"
-echo "  Nexus      https://nexus.swirlit.dev"
-echo "  ArgoCD     https://argocd.swirlit.dev"
-echo "  Kibana     https://kibana.swirlit.dev"
-echo "  GitLab     https://gitlab.swirlit.dev"
-echo "  Longhorn   https://longhorn.swirlit.dev"
-echo ""
-echo "Expected DNS target IP: $SERVER_IP"
-check_dns_records
+if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
+    echo "Service access (HTTPS via domain):"
+    echo "  Keycloak   https://keycloak.swirlit.dev"
+    echo "  Jenkins    https://jenkins.swirlit.dev"
+    echo "  SonarQube  https://sonarqube.swirlit.dev"
+    echo "  Grafana    https://grafana.swirlit.dev"
+    echo "  Nexus      https://nexus.swirlit.dev"
+    echo "  ArgoCD     https://argocd.swirlit.dev"
+    echo "  Kibana     https://kibana.swirlit.dev"
+    echo "  GitLab     https://gitlab.swirlit.dev"
+    echo "  Longhorn   https://longhorn.swirlit.dev"
+    echo "  Vault      https://vault.swirlit.dev"
+    echo ""
+    echo "Expected DNS target IP: $SERVER_IP"
+    check_dns_records
 
-echo ""
-echo "Retrieve credentials:"
-echo "  Jenkins:  kubectl exec -n infrastructure deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword"
-echo "  ArgoCD:   kubectl -n infrastructure get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
-echo "  Nexus:    kubectl exec -n infrastructure deployment/nexus -- cat /nexus-data/admin.password"
-echo "  GitLab:   kubectl exec -n infrastructure deployment/gitlab -- grep 'Password:' /etc/gitlab/initial_root_password"
-echo "  MongoDB:  kubectl get secret -n infrastructure mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"
-echo ""
+    echo ""
+    echo "Retrieve credentials:"
+    echo "  Jenkins:  kubectl exec -n infrastructure deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword"
+    echo "  ArgoCD:   kubectl -n infrastructure get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+    echo "  Nexus:    kubectl exec -n infrastructure deployment/nexus -- cat /nexus-data/admin.password"
+    echo "  GitLab:   kubectl exec -n infrastructure deployment/gitlab -- grep 'Password:' /etc/gitlab/initial_root_password"
+    echo "  MongoDB:  kubectl get secret -n infrastructure mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"
+    echo "  Vault:    kubectl get secret -n infrastructure vault-init -o jsonpath='{.data.root_token}' | base64 -d"
+    echo ""
 
-echo "Pod status:"
-kubectl get pods -n infrastructure --no-headers 2>&1 | awk '{printf "  %-50s %s\n", $1, $2}'
+    echo "Pod status:"
+    kubectl get pods -n infrastructure --no-headers 2>&1 | awk '{printf "  %-50s %s\n", $1, $2}'
+fi

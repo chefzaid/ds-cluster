@@ -128,7 +128,10 @@ spec:
         - containerPort: 3000
         env:
         - name: GF_SECURITY_ADMIN_PASSWORD
-          value: admin
+          valueFrom:
+            secretKeyRef:
+              name: grafana-admin-secret
+              key: GF_SECURITY_ADMIN_PASSWORD
         volumeMounts:
         - name: datasources
           mountPath: /etc/grafana/provisioning/datasources/datasources.yaml

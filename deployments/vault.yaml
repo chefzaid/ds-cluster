@@ -1,0 +1,40 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-tokenreview-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: vault
+    namespace: infrastructure
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vault-ingress
+  namespace: infrastructure
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - vault.swirlit.dev
+      secretName: swirlit-dev-tls
+  rules:
+    - host: vault.swirlit.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vault-ui
+                port:
+                  number: 8200

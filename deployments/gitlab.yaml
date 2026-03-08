@@ -5,11 +5,12 @@ metadata:
   name: gitlab-config
   namespace: infrastructure
 spec:
+  storageClassName: longhorn
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
+      storage: 2Gi
 
 ---
 apiVersion: v1
@@ -18,11 +19,12 @@ metadata:
   name: gitlab-logs
   namespace: infrastructure
 spec:
+  storageClassName: longhorn
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
+      storage: 2Gi
 
 ---
 apiVersion: v1
@@ -31,11 +33,12 @@ metadata:
   name: gitlab-data
   namespace: infrastructure
 spec:
+  storageClassName: longhorn
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 30Gi
+      storage: 15Gi
 
 ---
 apiVersion: apps/v1
@@ -76,7 +79,7 @@ spec:
             memory: "2Gi"
             cpu: "1"
           limits:
-            memory: "4Gi"
+            memory: "8Gi"
             cpu: "2"
         readinessProbe:
           httpGet:
