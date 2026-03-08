@@ -19,6 +19,7 @@ spec:
     - kibana.swirlit.dev
     - gitlab.swirlit.dev
     - longhorn.swirlit.dev
+    - dbgate.swirlit.dev
     secretName: swirlit-dev-tls
   rules:
   - host: keycloak.swirlit.dev
@@ -111,6 +112,16 @@ spec:
             name: longhorn-frontend
             port:
               number: 80
+  - host: dbgate.swirlit.dev
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: dbgate
+            port:
+              number: 3000
 
 ---
 apiVersion: v1

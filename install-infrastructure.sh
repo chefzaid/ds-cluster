@@ -120,6 +120,7 @@ check_dns_records() {
         "gitlab.swirlit.dev"
         "longhorn.swirlit.dev"
         "vault.swirlit.dev"
+        "dbgate.swirlit.dev"
     )
 
     for host in "${hosts[@]}"; do
@@ -161,7 +162,7 @@ ask_with_default "Apply node firewall hardening baseline now?" "N" && APPLY_FIRE
 ask_with_default "Install/upgrade NGINX ingress controller?" "Y" && INSTALL_INGRESS=true || INSTALL_INGRESS=false
 ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
 ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
-ask_with_default "Deploy/upgrade platform services (Keycloak, monitoring, ELK, Jenkins, SonarQube, Nexus, GitLab, ingress rules)?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
+ask_with_default "Deploy/upgrade platform services (Keycloak, monitoring, ELK, Jenkins, SonarQube, Nexus, GitLab, DBGate, ingress rules)?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
 ask_with_default "Install/upgrade Descheduler addon resources (manual trigger only)?" "Y" && INSTALL_DESCHEDULER=true || INSTALL_DESCHEDULER=false
 ask_with_default "Install/upgrade ArgoCD?" "Y" && INSTALL_ARGOCD=true || INSTALL_ARGOCD=false
 
@@ -280,7 +281,8 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             kibana.swirlit.dev \
             gitlab.swirlit.dev \
             longhorn.swirlit.dev \
-            vault.swirlit.dev
+            vault.swirlit.dev \
+            dbgate.swirlit.dev
     fi
 
     if [[ "$INSTALL_LONGHORN" == "true" ]]; then
@@ -356,7 +358,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         "$VAULT_BOOTSTRAP_SCRIPT" infrastructure
 
         kubectl apply -f "$DEPLOY_DIR/vault-secrets.yaml"
-        for es in postgres-secret mongodb-secret sonarqube-db-credentials grafana-admin-secret keycloak-admin-secret keycloak-realm-config jenkins-maven-settings jenkins-npm-config; do
+        for es in postgres-secret mongodb-secret sonarqube-db-credentials grafana-admin-secret keycloak-admin-secret keycloak-realm-config jenkins-maven-settings jenkins-npm-config dbgate-auth-secret; do
             kubectl wait --for=condition=Ready externalsecret/"$es" -n infrastructure --timeout=180s 2>/dev/null || warn "ExternalSecret '$es' is still reconciling."
         done
     fi
@@ -377,7 +379,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
         step "Deploying platform services..."
-        for f in keycloak.yaml monitoring.yaml elk.yaml jenkins.yaml sonarqube.yaml nexus.yaml gitlab.yaml ingress.yaml; do
+        for f in keycloak.yaml monitoring.yaml elk.yaml jenkins.yaml sonarqube.yaml nexus.yaml gitlab.yaml dbgate.yaml ingress.yaml; do
             kubectl apply -f "$DEPLOY_DIR/$f"
         done
 
@@ -387,6 +389,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl wait --for=condition=ready pod -l app=kibana         -n infrastructure --timeout=180s 2>/dev/null || warn "Kibana still starting..."
         kubectl wait --for=condition=ready pod -l app=logstash       -n infrastructure --timeout=180s 2>/dev/null || warn "Logstash still starting..."
         kubectl wait --for=condition=ready pod -l app=gitlab         -n infrastructure --timeout=900s 2>/dev/null || warn "GitLab still starting..."
+        kubectl wait --for=condition=ready pod -l app=dbgate         -n infrastructure --timeout=180s 2>/dev/null || warn "DBGate still starting..."
     fi
 
     if [[ "$INSTALL_DESCHEDULER" == "true" ]]; then
@@ -446,6 +449,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     echo "  GitLab     https://gitlab.swirlit.dev"
     echo "  Longhorn   https://longhorn.swirlit.dev"
     echo "  Vault      https://vault.swirlit.dev"
+    echo "  DBGate     https://dbgate.swirlit.dev"
     echo ""
     echo "Expected DNS target IP: $SERVER_IP"
     check_dns_records
@@ -458,6 +462,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     echo "  GitLab:   kubectl exec -n infrastructure deployment/gitlab -- grep 'Password:' /etc/gitlab/initial_root_password"
     echo "  MongoDB:  kubectl get secret -n infrastructure mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"
     echo "  Vault:    kubectl get secret -n infrastructure vault-init -o jsonpath='{.data.root_token}' | base64 -d"
+    echo "  DBGate:   kubectl get secret -n infrastructure dbgate-auth-secret -o go-template='{{printf \"%s\" (index .data \"LOGIN\" | base64decode)}}:{{printf \"%s\" (index .data \"PASSWORD\" | base64decode)}}'"
     echo "  Descheduler trigger: kubectl create -f deployments/descheduler-run-job.yaml"
     echo ""
 

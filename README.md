@@ -17,6 +17,7 @@ Infrastructure repository Dedicated Server (DS) cluster. It owns cluster prerequ
 *   **Monitoring**: Prometheus, Grafana
 *   **Logging**: ELK Stack (Elasticsearch, Logstash, Kibana)
 *   **Cluster Maintenance**: Kubernetes Descheduler (manual trigger mode)
+*   **DB Management UI**: DBGate (PostgreSQL/Redis/MongoDB)
 *   **NoSQL Database**: MongoDB
 *   **Secrets Management**: HashiCorp Vault + External Secrets Operator
 *   **Automation**: Ansible
@@ -35,7 +36,7 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 
 ### Traffic Flow (Platform View)
 1.  **Client/Browser** connects to **Nginx Ingress Controller** over HTTPS.
-2.  Ingress routes infrastructure hosts (Keycloak, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Grafana, Kibana, Longhorn, Vault).
+2.  Ingress routes infrastructure hosts (Keycloak, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Grafana, Kibana, Longhorn, Vault, DBGate).
 3.  App traffic routing and app workload manifests are owned by the application repository.
 
 ### Secrets Flow (Vault)
@@ -72,6 +73,7 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 | **Kibana** | `https://kibana.swirlit.dev` | Public | Log search and visualization |
 | **Longhorn UI** | `https://longhorn.swirlit.dev` | Public | Persistent volume management |
 | **Vault** | `https://vault.swirlit.dev` | Public | Secrets manager (source of truth for infrastructure credentials) |
+| **DBGate** | `https://dbgate.swirlit.dev` | Public | Web DB admin for PostgreSQL, Redis, and MongoDB |
 | **PostgreSQL** | `10.43.129.209:5432` | Internal | Primary DB, also used for Keycloak |
 | **MongoDB** | `mongodb.infrastructure.svc.cluster.local:27017` | Internal | Document database for infrastructure/application workloads |
 | **Redis** | `10.43.206.215:6379` | Internal | Cache backend for application services |
@@ -86,7 +88,7 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 
 | Namespace | Contents |
 |-----------|----------|
-| `infrastructure` | PostgreSQL, MongoDB, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Vault, External Secrets Operator, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana), Descheduler addon |
+| `infrastructure` | PostgreSQL, MongoDB, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Vault, External Secrets Operator, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana), DBGate, Descheduler addon |
 | `application` | Application services (owned/deployed from the application repo) |
 | `longhorn-system` | Longhorn storage manager |
 
@@ -106,7 +108,7 @@ chmod +x scripts/configure-vault.sh scripts/configure-node-security.sh
 ./install-infrastructure.sh
 ```
 
-The installer now prompts feature-by-feature (prereqs, K3s, Longhorn, security baseline, ingress, Vault/ESO, data stores, platform services, Descheduler addon, ArgoCD) so you can install only what is needed.
+The installer now prompts feature-by-feature (prereqs, K3s, Longhorn, security baseline, ingress, Vault/ESO, data stores, platform services including DBGate, Descheduler addon, ArgoCD) so you can install only what is needed.
 
 ### Manual Installation
 
@@ -177,7 +179,7 @@ chmod +x scripts/configure-vault.sh
 ./scripts/configure-vault.sh infrastructure
 kubectl apply -f deployments/vault-secrets.yaml
 
-for f in postgres kafka redis mongodb keycloak monitoring elk jenkins sonarqube nexus gitlab ingress; do
+for f in postgres kafka redis mongodb keycloak monitoring elk jenkins sonarqube nexus gitlab dbgate ingress; do
     kubectl apply -f deployments/${f}.yaml
 done
 
@@ -211,12 +213,13 @@ Create these DNS records in your Cloudflare zone, all pointing to `51.68.232.240
 | A | `kibana` | `51.68.232.240` | Proxied |
 | A | `longhorn` | `51.68.232.240` | Proxied |
 | A | `vault` | `51.68.232.240` | Proxied |
+| A | `dbgate` | `51.68.232.240` | Proxied |
 
 ### 2. Replace Temporary Self-Signed Cert with Cloudflare Origin Certificate
 The scripts create `swirlit-dev-tls` automatically with a self-signed cert. Replace it with Cloudflare Origin cert:
 
 1. Cloudflare Dashboard → **SSL/TLS** → **Origin Server** → **Create Certificate**
-2. Hostnames: `keycloak.swirlit.dev`, `jenkins.swirlit.dev`, `sonarqube.swirlit.dev`, `nexus.swirlit.dev`, `gitlab.swirlit.dev`, `argocd.swirlit.dev`, `grafana.swirlit.dev`, `kibana.swirlit.dev`, `longhorn.swirlit.dev`, `vault.swirlit.dev`, `*.swirlit.dev`
+2. Hostnames: `keycloak.swirlit.dev`, `jenkins.swirlit.dev`, `sonarqube.swirlit.dev`, `nexus.swirlit.dev`, `gitlab.swirlit.dev`, `argocd.swirlit.dev`, `grafana.swirlit.dev`, `kibana.swirlit.dev`, `longhorn.swirlit.dev`, `vault.swirlit.dev`, `dbgate.swirlit.dev`, `*.swirlit.dev`
 3. Save certificate and private key as local files (`tls.crt`, `tls.key`)
 4. Apply them:
 
@@ -294,6 +297,7 @@ Use this table for first-time setup credentials for every service that requires 
 | Jenkins | `admin` | `kubectl exec -n infrastructure deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword` | Password is generated by Jenkins on first startup. |
 | Nexus | `admin` | `kubectl exec -n infrastructure deployment/nexus -- cat /nexus-data/admin.password` | Password file exists until changed. |
 | GitLab | `root` | `kubectl exec -n infrastructure deployment/gitlab -- awk '/Password:/ {print $2}' /etc/gitlab/initial_root_password` | Initial file can expire/rotate; set a permanent password. |
+| DBGate | `base64 --decode <<< "$(kubectl get secret -n infrastructure dbgate-auth-secret -o jsonpath='{.data.LOGIN}')" && echo` | `base64 --decode <<< "$(kubectl get secret -n infrastructure dbgate-auth-secret -o jsonpath='{.data.PASSWORD}')" && echo` | DBGate is preconfigured with PostgreSQL, Redis, and MongoDB connections. |
 | ArgoCD | `admin` | `base64 --decode <<< "$(kubectl -n infrastructure get secret argocd-initial-admin-secret -o jsonpath='{.data.password}')" && echo` | Delete/rotate initial secret after onboarding. |
 | SonarQube | `admin` | `admin` | Default bootstrap credentials are static; change immediately after first login. |
 

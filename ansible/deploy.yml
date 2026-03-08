@@ -76,6 +76,7 @@
         - keycloak-realm-config
         - jenkins-maven-settings
         - jenkins-npm-config
+        - dbgate-auth-secret
       ignore_errors: yes
 
     - name: Deploy data stores
@@ -103,6 +104,7 @@
         - sonarqube.yaml
         - nexus.yaml
         - gitlab.yaml
+        - dbgate.yaml
         - ingress.yaml
       register: result
       changed_when: "'created' in result.stdout or 'configured' in result.stdout"
@@ -114,7 +116,7 @@
 
     - name: Wait for platform services
       command: kubectl wait --for=condition=ready pod -l app={{ item }} -n {{ infra_namespace }} --timeout=300s
-      loop: [keycloak, jenkins, elasticsearch, kibana, gitlab]
+      loop: [keycloak, jenkins, elasticsearch, kibana, gitlab, dbgate]
       ignore_errors: yes
 
     - name: Display status

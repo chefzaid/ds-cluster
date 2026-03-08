@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dbgate-pvc
+  namespace: infrastructure
+spec:
+  storageClassName: longhorn
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dbgate
+  namespace: infrastructure
+  labels:
+    app: dbgate
+spec:
+  type: ClusterIP
+  selector:
+    app: dbgate
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbgate
+  namespace: infrastructure
+  labels:
+    app: dbgate
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dbgate
+  template:
+    metadata:
+      labels:
+        app: dbgate
+    spec:
+      containers:
+        - name: dbgate
+          image: dbgate/dbgate:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: LOGIN
+              valueFrom:
+                secretKeyRef:
+                  name: dbgate-auth-secret
+                  key: LOGIN
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dbgate-auth-secret
+                  key: PASSWORD
+            - name: CONNECTIONS
+              value: "postgres,redis,mongo"
+            - name: LABEL_postgres
+              value: "PostgreSQL"
+            - name: SERVER_postgres
+              value: "postgres.infrastructure.svc.cluster.local"
+            - name: PORT_postgres
+              value: "5432"
+            - name: DATABASE_postgres
+              value: "appdb"
+            - name: ENGINE_postgres
+              value: "postgres@dbgate-plugin-postgres"
+            - name: USER_postgres
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: PASSWORD_postgres
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: LABEL_redis
+              value: "Redis"
+            - name: SERVER_redis
+              value: "redis.infrastructure.svc.cluster.local"
+            - name: PORT_redis
+              value: "6379"
+            - name: ENGINE_redis
+              value: "redis@dbgate-plugin-redis"
+            - name: LABEL_mongo
+              value: "MongoDB"
+            - name: ENGINE_mongo
+              value: "mongo@dbgate-plugin-mongo"
+            - name: MONGO_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: MONGO_INITDB_ROOT_USERNAME
+            - name: MONGO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: MONGO_INITDB_ROOT_PASSWORD
+            - name: URL_mongo
+              value: "mongodb://$(MONGO_USERNAME):$(MONGO_PASSWORD)@mongodb.infrastructure.svc.cluster.local:27017/admin"
+          volumeMounts:
+            - name: dbgate-data
+              mountPath: /root/.dbgate
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 400m
+              memory: 768Mi
+      volumes:
+        - name: dbgate-data
+          persistentVolumeClaim:
+            claimName: dbgate-pvc

@@ -271,4 +271,11 @@ EOF
     npmrc="$npmrc" >/dev/null
 fi
 
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/dbgate >/dev/null 2>&1; then
+  info "Seeding Vault secret: infrastructure/dbgate"
+  vault_cmd_auth "$root_token" kv put secret/infrastructure/dbgate \
+    login="admin" \
+    password="$(generate_secret)" >/dev/null
+fi
+
 info "Vault bootstrap/configuration completed."
