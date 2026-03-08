@@ -19,12 +19,13 @@
         - postgres.yaml
         - kafka.yaml
         - redis.yaml
+        - mongodb.yaml
       register: result
       changed_when: "'created' in result.stdout or 'configured' in result.stdout"
 
     - name: Wait for data stores
       command: kubectl wait --for=condition=ready pod -l app={{ item }} -n {{ infra_namespace }} --timeout=180s
-      loop: [postgres, redis, zookeeper, kafka]
+      loop: [postgres, redis, mongodb, zookeeper, kafka]
       ignore_errors: yes
 
     - name: Deploy platform services

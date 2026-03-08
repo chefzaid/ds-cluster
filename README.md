@@ -16,6 +16,7 @@ Infrastructure repository Dedicated Server (DS) cluster. It owns cluster prerequ
 *   **Source Control**: GitLab
 *   **Monitoring**: Prometheus, Grafana
 *   **Logging**: ELK Stack (Elasticsearch, Logstash, Kibana)
+*   **NoSQL Database**: MongoDB
 *   **Automation**: Ansible
 
 > **Note on Nexus**:
@@ -63,6 +64,7 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 | **Kibana** | `https://kibana.swirlit.dev` | Public | Log search and visualization |
 | **Longhorn UI** | `https://longhorn.swirlit.dev` | Public | Persistent volume management |
 | **PostgreSQL** | `10.43.129.209:5432` | Internal | Primary DB for user-app, order-app, and Keycloak |
+| **MongoDB** | `mongodb.infrastructure.svc.cluster.local:27017` | Internal | Document database for infrastructure/application workloads |
 | **Redis** | `10.43.206.215:6379` | Internal | Cache backend for application services |
 | **Kafka** | `kafka.infrastructure.svc.cluster.local:9092` | Internal | Event bus for order saga events |
 | **Zookeeper** | `zookeeper.infrastructure.svc.cluster.local:2181` | Internal | Coordination service for Kafka |
@@ -75,7 +77,7 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 
 | Namespace | Contents |
 |-----------|----------|
-| `infrastructure` | PostgreSQL, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana) |
+| `infrastructure` | PostgreSQL, MongoDB, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana) |
 | `application` | Application services (owned/deployed from the application repo) |
 | `longhorn-system` | Longhorn storage manager |
 
@@ -138,7 +140,7 @@ kubectl create namespace infrastructure
 # Create TLS secret for infrastructure ingress
 kubectl create secret tls swirlit-dev-tls --cert=tls.crt --key=tls.key -n infrastructure --dry-run=client -o yaml | kubectl apply -f -
 
-for f in postgres kafka redis keycloak monitoring elk jenkins sonarqube nexus gitlab ingress; do
+for f in postgres kafka redis mongodb keycloak monitoring elk jenkins sonarqube nexus gitlab ingress; do
     kubectl apply -f ${f}.yaml
 done
 ```
@@ -228,6 +230,10 @@ kubectl -n infrastructure get secret argocd-initial-admin-secret -o jsonpath="{.
 # PostgreSQL: Update secret in postgres.yaml (base64 encoded)
 # Change before production use!
 echo -n 'YOUR_NEW_PASSWORD' | base64
+
+# MongoDB: Update root username/password in mongodb.yaml (base64 encoded)
+# Change before production use!
+echo -n 'YOUR_NEW_MONGODB_PASSWORD' | base64
 
 # Keycloak admin password: Update KEYCLOAK_ADMIN_PASSWORD in keycloak.yaml
 # SonarQube: Change admin password on first login

@@ -266,9 +266,11 @@ step "Deploying core data stores..."
 kubectl apply -f "$DEPLOY_DIR/postgres.yaml"
 kubectl apply -f "$DEPLOY_DIR/kafka.yaml"
 kubectl apply -f "$DEPLOY_DIR/redis.yaml"
+kubectl apply -f "$DEPLOY_DIR/mongodb.yaml"
 
 kubectl wait --for=condition=ready pod -l app=postgres  -n infrastructure --timeout=180s
 kubectl wait --for=condition=ready pod -l app=redis     -n infrastructure --timeout=120s
+kubectl wait --for=condition=ready pod -l app=mongodb   -n infrastructure --timeout=180s
 kubectl wait --for=condition=ready pod -l app=zookeeper -n infrastructure --timeout=180s
 kubectl wait --for=condition=ready pod -l app=kafka     -n infrastructure --timeout=180s
 
@@ -337,6 +339,7 @@ echo "  Jenkins:  kubectl exec -n infrastructure deployment/jenkins -- cat /var/
 echo "  ArgoCD:   kubectl -n infrastructure get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
 echo "  Nexus:    kubectl exec -n infrastructure deployment/nexus -- cat /nexus-data/admin.password"
 echo "  GitLab:   kubectl exec -n infrastructure deployment/gitlab -- grep 'Password:' /etc/gitlab/initial_root_password"
+echo "  MongoDB:  kubectl get secret -n infrastructure mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"
 echo ""
 
 echo "Pod status:"
