@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # install-infrastructure.sh
-# Installs prerequisites and deploys infrastructure components
+# Installs prerequisites and deploys infra components
 # ==============================================================================
 set -euo pipefail
 
@@ -266,12 +266,12 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl wait --for=condition=Ready node --all --timeout=120s
     fi
 
-    step "Creating infrastructure namespace..."
-    kubectl create namespace infrastructure 2>/dev/null || true
+    step "Creating infra namespace..."
+    kubectl create namespace infra 2>/dev/null || true
 
     if [[ "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
         step "Ensuring HTTPS TLS secret..."
-        ensure_tls_secret infrastructure swirlit-dev-tls \
+        ensure_tls_secret infra swirlit-dev-tls \
             keycloak.swirlit.dev \
             jenkins.swirlit.dev \
             sonarqube.swirlit.dev \
@@ -311,15 +311,15 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         step "Installing Nginx Ingress Controller..."
         helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx 2>/dev/null || true
         helm repo update > /dev/null 2>&1
-        if helm list -n infrastructure 2>/dev/null | grep -q ingress-nginx; then
+        if helm list -n infra 2>/dev/null | grep -q ingress-nginx; then
             helm upgrade ingress-nginx ingress-nginx/ingress-nginx \
-                --namespace infrastructure \
+                --namespace infra \
                 --set controller.service.type=LoadBalancer \
                 --set controller.service.enableHttp=true \
                 --wait --timeout 120s
         else
             helm install ingress-nginx ingress-nginx/ingress-nginx \
-                --namespace infrastructure \
+                --namespace infra \
                 --set controller.service.type=LoadBalancer \
                 --set controller.service.enableHttp=true \
                 --wait --timeout 120s
@@ -331,35 +331,34 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
         helm repo update > /dev/null 2>&1
         helm upgrade --install vault hashicorp/vault \
-            --namespace infrastructure \
+            --namespace infra \
             --set injector.enabled=false \
             --set server.ha.enabled=true \
             --set server.ha.raft.enabled=true \
             --set server.ha.replicas=1 \
-            --set server.dataStorage.storageClass=longhorn \
-            --wait --timeout 300s
+            --set server.dataStorage.storageClass=longhorn
 
         step "Installing External Secrets Operator..."
         helm repo add external-secrets https://charts.external-secrets.io 2>/dev/null || true
         helm repo update > /dev/null 2>&1
         helm upgrade --install external-secrets external-secrets/external-secrets \
-            --namespace infrastructure \
+            --namespace infra \
             --set installCRDs=true \
             --wait --timeout 300s
 
         step "Applying Vault access and secret-sync manifests..."
         kubectl apply -f "$DEPLOY_DIR/vault.yaml"
 
-        kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infrastructure --timeout=300s
-        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=external-secrets -n infrastructure --timeout=180s
+        kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infra --timeout=300s
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=external-secrets -n infra --timeout=180s
 
         [[ -x "$VAULT_BOOTSTRAP_SCRIPT" ]] || chmod +x "$VAULT_BOOTSTRAP_SCRIPT"
         step "Bootstrapping Vault auth/policies and seeding secrets..."
-        "$VAULT_BOOTSTRAP_SCRIPT" infrastructure
+        "$VAULT_BOOTSTRAP_SCRIPT" infra
 
         kubectl apply -f "$DEPLOY_DIR/vault-secrets.yaml"
         for es in postgres-secret mongodb-secret sonarqube-db-credentials grafana-admin-secret keycloak-admin-secret keycloak-realm-config jenkins-maven-settings jenkins-npm-config dbgate-auth-secret; do
-            kubectl wait --for=condition=Ready externalsecret/"$es" -n infrastructure --timeout=180s 2>/dev/null || warn "ExternalSecret '$es' is still reconciling."
+            kubectl wait --for=condition=Ready externalsecret/"$es" -n infra --timeout=180s 2>/dev/null || warn "ExternalSecret '$es' is still reconciling."
         done
     fi
 
@@ -370,11 +369,11 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl apply -f "$DEPLOY_DIR/redis.yaml"
         kubectl apply -f "$DEPLOY_DIR/mongodb.yaml"
 
-        kubectl wait --for=condition=ready pod -l app=postgres  -n infrastructure --timeout=180s
-        kubectl wait --for=condition=ready pod -l app=redis     -n infrastructure --timeout=120s
-        kubectl wait --for=condition=ready pod -l app=mongodb   -n infrastructure --timeout=180s
-        kubectl wait --for=condition=ready pod -l app=zookeeper -n infrastructure --timeout=180s
-        kubectl wait --for=condition=ready pod -l app=kafka     -n infrastructure --timeout=180s
+        kubectl wait --for=condition=ready pod -l app=postgres  -n infra --timeout=180s
+        kubectl wait --for=condition=ready pod -l app=redis     -n infra --timeout=120s
+        kubectl wait --for=condition=ready pod -l app=mongodb   -n infra --timeout=180s
+        kubectl wait --for=condition=ready pod -l app=zookeeper -n infra --timeout=180s
+        kubectl wait --for=condition=ready pod -l app=kafka     -n infra --timeout=180s
     fi
 
     if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
@@ -383,13 +382,13 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             kubectl apply -f "$DEPLOY_DIR/$f"
         done
 
-        kubectl wait --for=condition=ready pod -l app=keycloak      -n infrastructure --timeout=180s 2>/dev/null || warn "Keycloak still starting..."
-        kubectl wait --for=condition=ready pod -l app=jenkins        -n infrastructure --timeout=180s 2>/dev/null || warn "Jenkins still starting..."
-        kubectl wait --for=condition=ready pod -l app=elasticsearch  -n infrastructure --timeout=180s 2>/dev/null || warn "Elasticsearch still starting..."
-        kubectl wait --for=condition=ready pod -l app=kibana         -n infrastructure --timeout=180s 2>/dev/null || warn "Kibana still starting..."
-        kubectl wait --for=condition=ready pod -l app=logstash       -n infrastructure --timeout=180s 2>/dev/null || warn "Logstash still starting..."
-        kubectl wait --for=condition=ready pod -l app=gitlab         -n infrastructure --timeout=900s 2>/dev/null || warn "GitLab still starting..."
-        kubectl wait --for=condition=ready pod -l app=dbgate         -n infrastructure --timeout=180s 2>/dev/null || warn "DBGate still starting..."
+        kubectl wait --for=condition=ready pod -l app=keycloak      -n infra --timeout=180s 2>/dev/null || warn "Keycloak still starting..."
+        kubectl wait --for=condition=ready pod -l app=jenkins        -n infra --timeout=180s 2>/dev/null || warn "Jenkins still starting..."
+        kubectl wait --for=condition=ready pod -l app=elasticsearch  -n infra --timeout=180s 2>/dev/null || warn "Elasticsearch still starting..."
+        kubectl wait --for=condition=ready pod -l app=kibana         -n infra --timeout=180s 2>/dev/null || warn "Kibana still starting..."
+        kubectl wait --for=condition=ready pod -l app=logstash       -n infra --timeout=180s 2>/dev/null || warn "Logstash still starting..."
+        kubectl wait --for=condition=ready pod -l app=gitlab         -n infra --timeout=900s 2>/dev/null || warn "GitLab still starting..."
+        kubectl wait --for=condition=ready pod -l app=dbgate         -n infra --timeout=180s 2>/dev/null || warn "DBGate still starting..."
     fi
 
     if [[ "$INSTALL_DESCHEDULER" == "true" ]]; then
@@ -399,9 +398,9 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     if [[ "$INSTALL_ARGOCD" == "true" ]]; then
         step "Installing ArgoCD..."
-        if helm list -n infrastructure 2>/dev/null | grep -q argocd; then
+        if helm list -n infra 2>/dev/null | grep -q argocd; then
             helm upgrade argocd argo/argo-cd \
-                --namespace infrastructure \
+                --namespace infra \
                 --set server.service.type=ClusterIP \
                 --set configs.params."server\\.insecure"=true \
                 --set redis.enabled=true \
@@ -410,7 +409,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
             helm repo update > /dev/null 2>&1
             helm install argocd argo/argo-cd \
-                --namespace infrastructure \
+                --namespace infra \
                 --set server.service.type=ClusterIP \
                 --set configs.params."server\\.insecure"=true \
                 --set redis.enabled=true \
@@ -456,16 +455,16 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     echo ""
     echo "Retrieve credentials:"
-    echo "  Jenkins:  kubectl exec -n infrastructure deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword"
-    echo "  ArgoCD:   kubectl -n infrastructure get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
-    echo "  Nexus:    kubectl exec -n infrastructure deployment/nexus -- cat /nexus-data/admin.password"
-    echo "  GitLab:   kubectl exec -n infrastructure deployment/gitlab -- grep 'Password:' /etc/gitlab/initial_root_password"
-    echo "  MongoDB:  kubectl get secret -n infrastructure mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"
-    echo "  Vault:    kubectl get secret -n infrastructure vault-init -o jsonpath='{.data.root_token}' | base64 -d"
-    echo "  DBGate:   kubectl get secret -n infrastructure dbgate-auth-secret -o go-template='{{printf \"%s\" (index .data \"LOGIN\" | base64decode)}}:{{printf \"%s\" (index .data \"PASSWORD\" | base64decode)}}'"
+    echo "  Jenkins:  kubectl exec -n infra deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword"
+    echo "  ArgoCD:   kubectl -n infra get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+    echo "  Nexus:    kubectl exec -n infra deployment/nexus -- cat /nexus-data/admin.password"
+    echo "  GitLab:   kubectl exec -n infra deployment/gitlab -- grep 'Password:' /etc/gitlab/initial_root_password"
+    echo "  MongoDB:  kubectl get secret -n infra mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"
+    echo "  Vault:    kubectl get secret -n infra vault-init -o jsonpath='{.data.root_token}' | base64 -d"
+    echo "  DBGate:   kubectl get secret -n infra dbgate-auth-secret -o go-template='{{printf \"%s\" (index .data \"LOGIN\" | base64decode)}}:{{printf \"%s\" (index .data \"PASSWORD\" | base64decode)}}'"
     echo "  Descheduler trigger: kubectl create -f deployments/descheduler-run-job.yaml"
     echo ""
 
     echo "Pod status:"
-    kubectl get pods -n infrastructure --no-headers 2>&1 | awk '{printf "  %-50s %s\n", $1, $2}'
+    kubectl get pods -n infra --no-headers 2>&1 | awk '{printf "  %-50s %s\n", $1, $2}'
 fi

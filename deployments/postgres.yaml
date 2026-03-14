@@ -3,7 +3,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: postgres-config
-  namespace: infrastructure
+  namespace: infra
   labels:
     app: postgres
 data:
@@ -16,7 +16,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: postgres-init-script
-  namespace: infrastructure
+  namespace: infra
   labels:
     app: postgres
 data:
@@ -28,7 +28,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgres-pvc
-  namespace: infrastructure
+  namespace: infra
 spec:
   storageClassName: longhorn
   accessModes:
@@ -43,7 +43,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: postgres
-  namespace: infrastructure
+  namespace: infra
 spec:
   ports:
   - port: 5432
@@ -58,7 +58,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres
-  namespace: infrastructure
+  namespace: infra
   labels:
     app: postgres
 spec:

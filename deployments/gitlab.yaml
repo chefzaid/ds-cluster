@@ -3,7 +3,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: gitlab-config
-  namespace: infrastructure
+  namespace: infra
 spec:
   storageClassName: longhorn
   accessModes:
@@ -17,7 +17,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: gitlab-logs
-  namespace: infrastructure
+  namespace: infra
 spec:
   storageClassName: longhorn
   accessModes:
@@ -31,7 +31,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: gitlab-data
-  namespace: infrastructure
+  namespace: infra
 spec:
   storageClassName: longhorn
   accessModes:
@@ -45,7 +45,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: gitlab
-  namespace: infrastructure
+  namespace: infra
   labels:
     app: gitlab
 spec:
@@ -120,7 +120,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: gitlab
-  namespace: infrastructure
+  namespace: infra
   labels:
     app: gitlab
 spec:

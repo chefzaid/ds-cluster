@@ -1,8 +1,8 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: infrastructure-ingress
-  namespace: infrastructure
+  name: infra-ingress
+  namespace: infra
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
@@ -128,7 +128,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: longhorn-frontend
-  namespace: infrastructure
+  namespace: infra
 spec:
   type: ExternalName
   externalName: longhorn-frontend.longhorn-system.svc.cluster.local

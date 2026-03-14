@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-NAMESPACE="${1:-infrastructure}"
+NAMESPACE="${1:-infra}"
 VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_ADDR="http://127.0.0.1:8200"
 
@@ -88,11 +88,11 @@ kubectl exec -n "$NAMESPACE" "$VAULT_POD" -- env VAULT_ADDR="$VAULT_ADDR" VAULT_
     token_reviewer_jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" >/dev/null'
 
 cat <<'EOF' | kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- env VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN="$root_token" vault policy write external-secrets-policy - >/dev/null
-path "secret/data/infrastructure/*" {
+path "secret/data/infra/*" {
   capabilities = ["read"]
 }
 
-path "secret/metadata/infrastructure/*" {
+path "secret/metadata/infra/*" {
   capabilities = ["read", "list"]
 }
 EOF
@@ -109,43 +109,43 @@ postgres_runtime_username="$(kubectl exec -n "$NAMESPACE" deployment/postgres --
 postgres_runtime_password="$(kubectl exec -n "$NAMESPACE" deployment/postgres -- printenv POSTGRES_PASSWORD 2>/dev/null || true)"
 [[ -n "$postgres_default_password" ]] || postgres_default_password="$(generate_secret)"
 
-if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/postgres >/dev/null 2>&1; then
-  info "Seeding Vault secret: infrastructure/postgres"
-  vault_cmd_auth "$root_token" kv put secret/infrastructure/postgres \
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/postgres >/dev/null 2>&1; then
+  info "Seeding Vault secret: infra/postgres"
+  vault_cmd_auth "$root_token" kv put secret/infra/postgres \
     username="${postgres_runtime_username:-$postgres_default_username}" \
     password="${postgres_runtime_password:-$postgres_default_password}" >/dev/null
 fi
 
-if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/postgres | jq -e '.data.data.username' >/dev/null 2>&1; then
-  vault_cmd_auth "$root_token" kv patch secret/infrastructure/postgres username="${postgres_runtime_username:-$postgres_default_username}" >/dev/null
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/postgres | jq -e '.data.data.username' >/dev/null 2>&1; then
+  vault_cmd_auth "$root_token" kv patch secret/infra/postgres username="${postgres_runtime_username:-$postgres_default_username}" >/dev/null
 fi
 
-if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/postgres | jq -e '.data.data.password' >/dev/null 2>&1; then
-  vault_cmd_auth "$root_token" kv patch secret/infrastructure/postgres password="${postgres_runtime_password:-$postgres_default_password}" >/dev/null
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/postgres | jq -e '.data.data.password' >/dev/null 2>&1; then
+  vault_cmd_auth "$root_token" kv patch secret/infra/postgres password="${postgres_runtime_password:-$postgres_default_password}" >/dev/null
 fi
 
-if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/mongodb >/dev/null 2>&1; then
-  info "Seeding Vault secret: infrastructure/mongodb"
-  vault_cmd_auth "$root_token" kv put secret/infrastructure/mongodb \
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/mongodb >/dev/null 2>&1; then
+  info "Seeding Vault secret: infra/mongodb"
+  vault_cmd_auth "$root_token" kv put secret/infra/mongodb \
     root_username="admin" \
     root_password="$(generate_secret)" >/dev/null
 fi
 
-if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/sonarqube >/dev/null 2>&1; then
-  info "Seeding Vault secret: infrastructure/sonarqube"
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/sonarqube >/dev/null 2>&1; then
+  info "Seeding Vault secret: infra/sonarqube"
   sonar_password="$(generate_secret)"
-  vault_cmd_auth "$root_token" kv put secret/infrastructure/sonarqube \
+  vault_cmd_auth "$root_token" kv put secret/infra/sonarqube \
     postgresql_password="$sonar_password" \
     jdbc_password="$sonar_password" >/dev/null
 fi
 
-if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/grafana >/dev/null 2>&1; then
-  info "Seeding Vault secret: infrastructure/grafana"
-  vault_cmd_auth "$root_token" kv put secret/infrastructure/grafana admin_password="$(generate_secret)" >/dev/null
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/grafana >/dev/null 2>&1; then
+  info "Seeding Vault secret: infra/grafana"
+  vault_cmd_auth "$root_token" kv put secret/infra/grafana admin_password="$(generate_secret)" >/dev/null
 fi
 
-if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/keycloak >/dev/null 2>&1; then
-  info "Seeding Vault secret: infrastructure/keycloak"
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/keycloak >/dev/null 2>&1; then
+  info "Seeding Vault secret: infra/keycloak"
   keycloak_admin_password="$(generate_secret)"
   keycloak_user_password="$(generate_secret)"
   keycloak_client_secret="$(generate_secret)"
@@ -219,14 +219,14 @@ if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/keyc
         ]
       }'
   )"
-  vault_cmd_auth "$root_token" kv put secret/infrastructure/keycloak \
+  vault_cmd_auth "$root_token" kv put secret/infra/keycloak \
     admin_username="admin" \
     admin_password="$keycloak_admin_password" \
     realm_export_json="$realm_export_json" >/dev/null
 fi
 
-if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/jenkins >/dev/null 2>&1; then
-  info "Seeding Vault secret: infrastructure/jenkins"
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/jenkins >/dev/null 2>&1; then
+  info "Seeding Vault secret: infra/jenkins"
   nexus_password="$(kubectl exec -n "$NAMESPACE" deployment/nexus -- cat /nexus-data/admin.password 2>/dev/null || true)"
   if [[ -z "$nexus_password" ]]; then
     warn "Unable to read Nexus admin password; seeding Jenkins config with generated placeholder password."
@@ -261,19 +261,19 @@ if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/jenk
 EOF
 )"
   npmrc="$(cat <<EOF
-registry=http://nexus.infrastructure.svc.cluster.local:8081/repository/npm-group/
+registry=http://nexus.infra.svc.cluster.local:8081/repository/npm-group/
 _auth=$nexus_auth
 always-auth=true
 EOF
 )"
-  vault_cmd_auth "$root_token" kv put secret/infrastructure/jenkins \
+  vault_cmd_auth "$root_token" kv put secret/infra/jenkins \
     settings_xml="$settings_xml" \
     npmrc="$npmrc" >/dev/null
 fi
 
-if ! vault_cmd_auth "$root_token" kv get -format=json secret/infrastructure/dbgate >/dev/null 2>&1; then
-  info "Seeding Vault secret: infrastructure/dbgate"
-  vault_cmd_auth "$root_token" kv put secret/infrastructure/dbgate \
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/dbgate >/dev/null 2>&1; then
+  info "Seeding Vault secret: infra/dbgate"
+  vault_cmd_auth "$root_token" kv put secret/infra/dbgate \
     login="admin" \
     password="$(generate_secret)" >/dev/null
 fi

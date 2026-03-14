@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   generateName: descheduler-manual-
-  namespace: infrastructure
+  namespace: infra
   labels:
     app: descheduler
 spec:

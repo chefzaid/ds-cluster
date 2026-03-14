@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: keycloak
-  namespace: infrastructure
+  namespace: infra
   labels:
     app: keycloak
 spec:
@@ -19,7 +19,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: keycloak
-  namespace: infrastructure
+  namespace: infra
   labels:
     app: keycloak
 spec:

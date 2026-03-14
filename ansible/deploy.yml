@@ -4,7 +4,7 @@
   connection: local
   gather_facts: false
   vars:
-    infra_namespace: "{{ infra_ns | default('infrastructure') }}"
+    infra_namespace: "{{ infra_ns | default('infra') }}"
     k8s_dir: "{{ playbook_dir }}/../deployments"
     apply_firewall_hardening: "{{ harden_firewall | default(true) }}"
 
@@ -35,7 +35,6 @@
         --set server.ha.raft.enabled=true
         --set server.ha.replicas=1
         --set server.dataStorage.storageClass=longhorn
-        --wait --timeout 300s
 
     - name: Install or upgrade External Secrets Operator
       command: >

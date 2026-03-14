@@ -3,7 +3,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: prometheus-config
-  namespace: infrastructure
+  namespace: infra
 data:
   prometheus.yml: |
     global:
@@ -24,7 +24,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-datasources
-  namespace: infrastructure
+  namespace: infra
 data:
   datasources.yaml: |
     apiVersion: 1
@@ -32,13 +32,13 @@ data:
       - name: Prometheus
         type: prometheus
         access: proxy
-        url: http://prometheus.infrastructure.svc.cluster.local:9090
+        url: http://prometheus.infra.svc.cluster.local:9090
         isDefault: true
         editable: true
       - name: Elasticsearch
         type: elasticsearch
         access: proxy
-        url: http://elasticsearch.infrastructure.svc.cluster.local:9200
+        url: http://elasticsearch.infra.svc.cluster.local:9200
         database: "app-logs-*"
         editable: true
         jsonData:
@@ -52,7 +52,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: prometheus
-  namespace: infrastructure
+  namespace: infra
 spec:
   type: ClusterIP
   ports:
@@ -66,7 +66,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: prometheus
-  namespace: infrastructure
+  namespace: infra
 spec:
   replicas: 1
   selector:
@@ -96,7 +96,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: grafana
-  namespace: infrastructure
+  namespace: infra
 spec:
   type: ClusterIP
   ports:
@@ -110,7 +110,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: grafana
-  namespace: infrastructure
+  namespace: infra
 spec:
   replicas: 1
   selector:
