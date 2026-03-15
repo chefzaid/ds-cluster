@@ -43,7 +43,7 @@
         --set installCRDs=true
         --wait --timeout 300s
 
-    - name: Apply Vault ingress and RBAC
+    - name: Apply unified Vault manifests (ingress, RBAC, secret sync, auto-unseal)
       command: kubectl apply -f {{ k8s_dir }}/vault.yaml
       register: result
       changed_when: "'created' in result.stdout or 'configured' in result.stdout"
@@ -58,11 +58,6 @@
 
     - name: Bootstrap Vault auth, policies, and seed secrets
       command: "{{ playbook_dir }}/../scripts/configure-vault.sh {{ infra_namespace }}"
-
-    - name: Apply Vault-backed ExternalSecret resources
-      command: kubectl apply -f {{ k8s_dir }}/vault-secrets.yaml
-      register: result
-      changed_when: "'created' in result.stdout or 'configured' in result.stdout"
 
     - name: Wait for ExternalSecret reconciliation
       command: kubectl wait --for=condition=Ready externalsecret/{{ item }} -n {{ infra_namespace }} --timeout=180s

@@ -346,7 +346,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --set installCRDs=true \
             --wait --timeout 300s
 
-        step "Applying Vault access and secret-sync manifests..."
+        step "Applying unified Vault manifests (ingress, RBAC, secret sync, auto-unseal)..."
         kubectl apply -f "$DEPLOY_DIR/vault.yaml"
 
         kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infra --timeout=300s
@@ -356,7 +356,6 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         step "Bootstrapping Vault auth/policies and seeding secrets..."
         "$VAULT_BOOTSTRAP_SCRIPT" infra
 
-        kubectl apply -f "$DEPLOY_DIR/vault-secrets.yaml"
         for es in postgres-secret mongodb-secret sonarqube-db-credentials grafana-admin-secret keycloak-admin-secret keycloak-realm-config jenkins-maven-settings jenkins-npm-config dbgate-auth-secret; do
             kubectl wait --for=condition=Ready externalsecret/"$es" -n infra --timeout=180s 2>/dev/null || warn "ExternalSecret '$es' is still reconciling."
         done

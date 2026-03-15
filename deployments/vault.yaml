@@ -38,3 +38,325 @@ spec:
                 name: vault-ui
                 port:
                   number: 8200
+---
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: vault-backend
+spec:
+  provider:
+    vault:
+      server: http://vault.infra.svc.cluster.local:8200
+      path: secret
+      version: v2
+      auth:
+        kubernetes:
+          mountPath: kubernetes
+          role: external-secrets-role
+          serviceAccountRef:
+            name: external-secrets
+            namespace: infra
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: postgres-secret
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: postgres-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: POSTGRES_USER
+      remoteRef:
+        key: infra/postgres
+        property: username
+    - secretKey: POSTGRES_PASSWORD
+      remoteRef:
+        key: infra/postgres
+        property: password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: mongodb-secret
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: mongodb-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: MONGO_INITDB_ROOT_USERNAME
+      remoteRef:
+        key: infra/mongodb
+        property: root_username
+    - secretKey: MONGO_INITDB_ROOT_PASSWORD
+      remoteRef:
+        key: infra/mongodb
+        property: root_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: sonarqube-db-credentials
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: sonarqube-db-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: postgresql-password
+      remoteRef:
+        key: infra/sonarqube
+        property: postgresql_password
+    - secretKey: jdbc-password
+      remoteRef:
+        key: infra/sonarqube
+        property: jdbc_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: grafana-admin-secret
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: grafana-admin-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: GF_SECURITY_ADMIN_PASSWORD
+      remoteRef:
+        key: infra/grafana
+        property: admin_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: keycloak-admin-secret
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: keycloak-admin-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: KC_BOOTSTRAP_ADMIN_USERNAME
+      remoteRef:
+        key: infra/keycloak
+        property: admin_username
+    - secretKey: KC_BOOTSTRAP_ADMIN_PASSWORD
+      remoteRef:
+        key: infra/keycloak
+        property: admin_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: keycloak-realm-config
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: keycloak-realm-config
+    creationPolicy: Owner
+  data:
+    - secretKey: realm-export.json
+      remoteRef:
+        key: infra/keycloak
+        property: realm_export_json
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: jenkins-maven-settings
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: jenkins-maven-settings
+    creationPolicy: Owner
+  data:
+    - secretKey: settings.xml
+      remoteRef:
+        key: infra/jenkins
+        property: settings_xml
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: jenkins-npm-config
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: jenkins-npm-config
+    creationPolicy: Owner
+  data:
+    - secretKey: .npmrc
+      remoteRef:
+        key: infra/jenkins
+        property: npmrc
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: dbgate-auth-secret
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: dbgate-auth-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: LOGIN
+      remoteRef:
+        key: infra/dbgate
+        property: login
+    - secretKey: PASSWORD
+      remoteRef:
+        key: infra/dbgate
+        property: password
+---
+# Vault auto-unseal: runs every minute, checks if vault-0 is sealed,
+# and unseals it using the key stored in the vault-init K8s secret.
+# This eliminates the need for manual intervention after node reboots.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-unseal
+  namespace: infra
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vault-unseal
+  namespace: infra
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["vault-init"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vault-unseal
+  namespace: infra
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vault-unseal
+subjects:
+  - kind: ServiceAccount
+    name: vault-unseal
+    namespace: infra
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-unseal
+  namespace: infra
+spec:
+  schedule: "* * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 55
+      template:
+        metadata:
+          labels:
+            app: vault-unseal
+        spec:
+          serviceAccountName: vault-unseal
+          restartPolicy: Never
+          containers:
+            - name: unseal
+              image: bitnami/kubectl:latest
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+
+                  # Wait for vault-0 pod to exist and be running
+                  PHASE=$(kubectl get pod vault-0 -n infra -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+                  if [ "$PHASE" != "Running" ]; then
+                    echo "vault-0 is not running (phase=$PHASE), skipping."
+                    exit 0
+                  fi
+
+                  # Check seal status
+                  SEALED=$(kubectl exec vault-0 -n infra -- vault status -format=json 2>/dev/null | grep '"sealed"' | head -1 | grep -o 'true\|false' || echo "unknown")
+
+                  if [ "$SEALED" = "false" ]; then
+                    echo "Vault is already unsealed, nothing to do."
+                    exit 0
+                  fi
+
+                  if [ "$SEALED" != "true" ]; then
+                    echo "Could not determine seal status (sealed=$SEALED), skipping."
+                    exit 0
+                  fi
+
+                  echo "Vault is sealed — unsealing..."
+                  UNSEAL_KEY=$(kubectl get secret vault-init -n infra -o jsonpath='{.data.unseal_key}' | base64 -d)
+
+                  if [ -z "$UNSEAL_KEY" ]; then
+                    echo "ERROR: unseal key is empty"
+                    exit 1
+                  fi
+
+                  kubectl exec vault-0 -n infra -- vault operator unseal "$UNSEAL_KEY"
+                  echo "Vault unsealed successfully."

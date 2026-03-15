@@ -168,6 +168,7 @@ helm upgrade --install vault hashicorp/vault -n infra \
     --set server.ha.raft.enabled=true \
     --set server.ha.replicas=1 \
     --set server.dataStorage.storageClass=longhorn
+# Includes Vault ingress/RBAC + ExternalSecrets + auto-unseal CronJob resources
 kubectl apply -f deployments/vault.yaml
 
 # Install External Secrets Operator
@@ -177,7 +178,6 @@ helm upgrade --install external-secrets external-secrets/external-secrets -n inf
 # Configure Vault and seed secret values
 chmod +x scripts/configure-vault.sh
 ./scripts/configure-vault.sh infra
-kubectl apply -f deployments/vault-secrets.yaml
 
 for f in postgres kafka redis mongodb keycloak monitoring elk jenkins sonarqube nexus gitlab dbgate ingress; do
     kubectl apply -f deployments/${f}.yaml
