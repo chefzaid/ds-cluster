@@ -53,16 +53,20 @@ Homepage is the single entry point for every installed application, platform
 tool, internal data service, observability component, security tool, and
 Kubernetes system service. Public entries are clickable; internal-only entries
 show their purpose and live Kubernetes status without exposing them publicly.
-This repository owns Odoo in the shared `apps` namespace. DevApp, Thoughty, and
-Indezy publish their dashboard entries from their own Kubernetes Ingress
-annotations, without adding application-specific runtime resources here. Their
-public hostnames remain part of the central Cloudflare inventory so DNS and edge
-configuration are reproducible from this repository.
+This repository owns Odoo in the shared `apps` namespace. DevApp, Thoughty,
+Indezy, and the public website publish dashboard entries from their own
+Kubernetes Ingress annotations, without adding application-specific runtime
+resources here. Their public hostnames remain part of the central Cloudflare
+inventory so DNS and edge configuration are reproducible from this repository.
 
 ## Service dashboard
 
 Open `https://dashboard.<your-domain>` for the complete categorized service
-catalog; the zone apex redirects there. Cloudflare Access protects the
+catalog. The zone apex, `https://<your-domain>` (`https://swirlit.dev` in the
+deployed cluster), serves the public site from the separate `website` repository.
+That repository owns the website workload and apex Ingress in `apps`, together
+with its CI/CD pipeline and Argo CD Application. This repository maintains the
+apex DNS record and shared ingress infrastructure. Cloudflare Access protects the
 administrative host inventory in `config/platform.env` through Keycloak SSO
 with a 24-hour session.
 Cluster automation uses internal Kubernetes service names, so these public
@@ -102,9 +106,9 @@ The infrastructure repository lives at `<gitlab-group>/bm-cluster` in GitLab.
 Its instance-scoped Kubernetes runner executes `.gitlab-ci.yml` in the isolated
 `gitlab-runners` namespace. The default branch is continuously reconciled by
 the `bm-cluster` Argo CD Application. Centrally owned Odoo resources under
-`k8s/apps` are included when `appsEnabled=true`; DevApp, Thoughty, and Indezy
-remain outside this infrastructure GitOps boundary and reconcile through their
-own Argo CD Applications.
+`k8s/apps` are included when `appsEnabled=true`; DevApp, Thoughty, Indezy, and
+the website remain outside this infrastructure GitOps boundary and reconcile
+through their own Argo CD Applications.
 
 Repository synchronization is optional. When selected in the installer, it asks
 for any number of `GitHub-owner/repository=GitLab-group/repository` mappings and

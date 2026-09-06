@@ -105,7 +105,7 @@ Optional environment variables:
   CLOUDFLARE_ENABLE_REGISTRY_API_COMPATIBILITY
                                       Prevent browser-only bot challenges on the Registry (default: true)
   CLOUDFLARE_ENABLE_ACCESS         Default: true
-  CLOUDFLARE_PUBLISH_APEX          Publish the zone apex to its safe dashboard redirect (default: true)
+  CLOUDFLARE_PUBLISH_APEX          Publish the zone apex for the application-owned public website (default: true)
   CLOUDFLARE_PUBLISH_NODE_DNS      Publish NODE.DOMAIN unproxied for administration (default: true)
   CLOUDFLARE_NODE_DNS_LABEL        Public node label (default: config/platform.env)
   CLOUDFLARE_ACCESS_ALLOWED_EMAILS Space-separated Access email allowlist

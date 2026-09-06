@@ -272,35 +272,6 @@ spec:
                   number: 5050
 
 ---
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: apex-redirect
-  namespace: infra
-  annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/permanent-redirect: https://dashboard.__PUBLIC_DOMAIN__/
-    nginx.ingress.kubernetes.io/permanent-redirect-code: "308"
-spec:
-  ingressClassName: nginx
-  tls:
-  - hosts:
-    - __PUBLIC_DOMAIN__
-    secretName: swirlit-dev-tls
-  rules:
-  - host: __PUBLIC_DOMAIN__
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: homepage
-            port:
-              number: 3000
-
----
 apiVersion: v1
 kind: Service
 metadata:
