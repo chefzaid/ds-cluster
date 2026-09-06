@@ -263,12 +263,6 @@ data:
             podSelector: app=kube-state-metrics
 
     - Security & Identity:
-        - Trivy:
-            icon: trivy.png
-            href: https://grafana.__PUBLIC_DOMAIN__/d/trivy-security/trivy-security-reports
-            description: Cluster vulnerability, configuration, RBAC, secret, and compliance reports
-            namespace: infra
-            podSelector: app.kubernetes.io/name=trivy-operator
         - Keycloak:
             icon: keycloak.png
             href: https://keycloak.__PUBLIC_DOMAIN__/auth/admin/master/console/
@@ -299,6 +293,12 @@ data:
         - UFW:
             icon: mdi-wall-fire
             description: Every-node firewall and Cloudflare origin restriction
+        - Trivy:
+            icon: trivy.png
+            href: https://grafana.__PUBLIC_DOMAIN__/d/trivy-security/trivy-security-reports
+            description: Cluster vulnerability, configuration, RBAC, secret, and compliance reports
+            namespace: infra
+            podSelector: app.kubernetes.io/name=trivy-operator
         - Lynis:
             icon: ubuntu-linux.png
             description: Monthly control-plane audits, Kibana reporting, and transient worker scans
