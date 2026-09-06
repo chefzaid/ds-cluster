@@ -7,6 +7,7 @@ REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLATFORM_CONFIG="$REPOSITORY_ROOT/config/platform.env"
 CONTROL_PLANE_SCHEDULABLE="${CONTROL_PLANE_SCHEDULABLE:-preserve}"
 EXPECTED_NODE_COUNT="${CLUSTER_NODE_COUNT:-}"
+EXPECTED_CONTROL_PLANE_COUNT=""
 UPDATE_LONGHORN_HELM=false
 PRINT_REPLICA_COUNT=false
 CALCULATE_WORKER_COUNT=""
@@ -33,21 +34,24 @@ longhorn_replica_count() {
 
 usage() {
     cat <<'EOF'
-Reconcile topology-dependent cluster configuration from Ready Kubernetes nodes.
+Reconcile topology-dependent cluster configuration from registered Kubernetes nodes.
 
 Usage: scripts/reconcile-cluster-topology.sh [options]
 
   --control-plane-schedulable true|false|preserve
   --expected-node-count COUNT
+  --expected-control-plane-count COUNT
   --update-longhorn-helm
   --longhorn-chart-version VERSION
   --longhorn-timeout DURATION
   --print-longhorn-replicas
   --replicas-for-worker-count COUNT
 
-Longhorn uses one replica on a control-plane-only cluster. As soon as workers
-exist, the control plane is excluded from Longhorn storage scheduling and the
-default replica count equals the number of Ready workers.
+Expected counts require the corresponding registered nodes to be Ready.
+The control-plane count must be odd: 1 for standalone or 3, 5, ... for HA.
+Longhorn uses one replica on a control-plane-only cluster, regardless of the
+control-plane count. When workers exist, all control planes are excluded from
+Longhorn storage scheduling and replicas equal max(Ready workers, 1).
 EOF
 }
 
@@ -61,6 +65,11 @@ while (( $# > 0 )); do
         --expected-node-count)
             (( $# >= 2 )) || fail "$1 requires a positive integer"
             EXPECTED_NODE_COUNT="$2"
+            shift 2
+            ;;
+        --expected-control-plane-count)
+            (( $# >= 2 )) || fail "$1 requires a positive odd integer"
+            EXPECTED_CONTROL_PLANE_COUNT="$2"
             shift 2
             ;;
         --update-longhorn-helm)
@@ -102,6 +111,13 @@ case "${CONTROL_PLANE_SCHEDULABLE,,}" in
 esac
 [[ -z "$EXPECTED_NODE_COUNT" || "$EXPECTED_NODE_COUNT" =~ ^[1-9][0-9]*$ ]] || \
     fail "--expected-node-count must be a positive integer"
+if [[ -n "$EXPECTED_CONTROL_PLANE_COUNT" ]]; then
+    [[ "$EXPECTED_CONTROL_PLANE_COUNT" =~ ^[1-9][0-9]*$ &&
+       "${EXPECTED_CONTROL_PLANE_COUNT: -1}" =~ ^[13579]$ ]] || \
+        fail "--expected-control-plane-count must be a positive odd integer"
+    [[ -z "$EXPECTED_NODE_COUNT" || "$EXPECTED_CONTROL_PLANE_COUNT" -le "$EXPECTED_NODE_COUNT" ]] || \
+        fail "The expected control-plane count cannot exceed the expected node count"
+fi
 if [[ -n "$CALCULATE_WORKER_COUNT" ]]; then
     longhorn_replica_count "$CALCULATE_WORKER_COUNT" || \
         fail "--replicas-for-worker-count must be a non-negative integer"
@@ -113,7 +129,18 @@ command -v jq >/dev/null 2>&1 || fail "jq is required"
 kubectl cluster-info >/dev/null 2>&1 || fail "Cannot reach the Kubernetes API"
 
 nodes_json="$(kubectl get nodes -o json)"
+node_count="$(jq '.items | length' <<< "$nodes_json")"
 ready_node_count="$(jq '[.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))] | length' <<< "$nodes_json")"
+control_plane_count="$(jq '[.items[] |
+    select((.metadata.labels | has("node-role.kubernetes.io/control-plane")) or
+           (.metadata.labels | has("node-role.kubernetes.io/master")))
+] | length' <<< "$nodes_json")"
+ready_control_plane_count="$(jq '[.items[] |
+    select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) |
+    select((.metadata.labels | has("node-role.kubernetes.io/control-plane")) or
+           (.metadata.labels | has("node-role.kubernetes.io/master")))
+] | length' <<< "$nodes_json")"
+worker_count=$((node_count - control_plane_count))
 ready_worker_count="$(jq '[.items[] |
     select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) |
     select((.metadata.labels | has("node-role.kubernetes.io/control-plane")) | not) |
@@ -127,8 +154,17 @@ if [[ "$PRINT_REPLICA_COUNT" == "true" ]]; then
 fi
 
 (( ready_node_count >= 1 )) || fail "No Ready Kubernetes node was found"
-if [[ -n "$EXPECTED_NODE_COUNT" && "$ready_node_count" -ne "$EXPECTED_NODE_COUNT" ]]; then
-    fail "Expected $EXPECTED_NODE_COUNT Ready nodes, but found $ready_node_count"
+if [[ -n "$EXPECTED_NODE_COUNT" ]]; then
+    [[ "$node_count" -eq "$EXPECTED_NODE_COUNT" ]] || \
+        fail "Expected $EXPECTED_NODE_COUNT registered nodes, but found $node_count ($ready_node_count Ready)"
+    [[ "$ready_node_count" -eq "$EXPECTED_NODE_COUNT" ]] || \
+        fail "Expected $EXPECTED_NODE_COUNT Ready nodes, but found $ready_node_count"
+fi
+if [[ -n "$EXPECTED_CONTROL_PLANE_COUNT" ]]; then
+    [[ "$control_plane_count" -eq "$EXPECTED_CONTROL_PLANE_COUNT" ]] || \
+        fail "Expected $EXPECTED_CONTROL_PLANE_COUNT registered control-plane nodes, but found $control_plane_count"
+    [[ "$ready_control_plane_count" -eq "$EXPECTED_CONTROL_PLANE_COUNT" ]] || \
+        fail "Expected $EXPECTED_CONTROL_PLANE_COUNT Ready control-plane nodes, but found $ready_control_plane_count"
 fi
 
 mapfile -t control_plane_nodes < <(jq -r '.items[] |
@@ -142,28 +178,39 @@ if [[ "$CONTROL_PLANE_SCHEDULABLE" == "preserve" ]]; then
         -o jsonpath='{.data.controlPlaneSchedulable}' 2>/dev/null || true)"
     if [[ "$stored_mode" =~ ^(true|false)$ ]]; then
         CONTROL_PLANE_SCHEDULABLE="$stored_mode"
-    elif jq -e '[.items[] |
+    else
+        tainted_control_plane_count="$(jq '[.items[] |
         select((.metadata.labels | has("node-role.kubernetes.io/control-plane")) or
                (.metadata.labels | has("node-role.kubernetes.io/master"))) |
-        .spec.taints[]? |
-        select((.key == "node-role.kubernetes.io/control-plane" or
-                .key == "node-role.kubernetes.io/master") and .effect == "NoSchedule")
-    ] | length > 0' <<< "$nodes_json" >/dev/null; then
-        CONTROL_PLANE_SCHEDULABLE=false
-    else
-        CONTROL_PLANE_SCHEDULABLE=true
+        select(any(.spec.taints[]?;
+            (.key == "node-role.kubernetes.io/control-plane" or
+             .key == "node-role.kubernetes.io/master") and .effect == "NoSchedule"))
+        ] | length' <<< "$nodes_json")"
+        if (( tainted_control_plane_count == control_plane_count )); then
+            CONTROL_PLANE_SCHEDULABLE=false
+        elif (( tainted_control_plane_count == 0 )); then
+            CONTROL_PLANE_SCHEDULABLE=true
+        else
+            fail "Control-plane scheduling is mixed; explicitly choose --control-plane-schedulable true|false"
+        fi
     fi
 fi
 
-if [[ "$ready_node_count" -eq 1 && "$CONTROL_PLANE_SCHEDULABLE" != "true" ]]; then
-    fail "A control-plane-only cluster must allow workloads on its control plane"
+if [[ "$CONTROL_PLANE_SCHEDULABLE" != "true" && "$ready_worker_count" -eq 0 ]]; then
+    fail "Controller-only mode requires at least one Ready worker; a control-plane-only cluster must allow workloads on its control planes"
 fi
 
 if [[ "$CONTROL_PLANE_SCHEDULABLE" == "true" ]]; then
-    for taint_key in node-role.kubernetes.io/control-plane node-role.kubernetes.io/master; do
-        kubectl taint nodes "${control_plane_nodes[@]}" \
-            "$taint_key:NoSchedule-" >/dev/null 2>&1 || true
-    done
+    while IFS=$'\t' read -r node taint_key; do
+        [[ -n "$node" ]] || continue
+        kubectl taint nodes "$node" "$taint_key:NoSchedule-" >/dev/null
+    done < <(jq -r '.items[] |
+        select((.metadata.labels | has("node-role.kubernetes.io/control-plane")) or
+               (.metadata.labels | has("node-role.kubernetes.io/master"))) |
+        .metadata.name as $node | .spec.taints[]? |
+        select((.key == "node-role.kubernetes.io/control-plane" or
+                .key == "node-role.kubernetes.io/master") and .effect == "NoSchedule") |
+        [$node, .key] | @tsv' <<< "$nodes_json")
     control_plane_mode=controller-worker
     info "Control-plane nodes are schedulable controller-workers."
 else
@@ -232,9 +279,11 @@ if [[ "$longhorn_installed" == "true" ]]; then
 
     allow_control_plane_storage=true
     eviction_requested=false
-    if (( ready_worker_count > 0 )); then
+    if (( worker_count > 0 )); then
         allow_control_plane_storage=false
-        eviction_requested=true
+        if (( ready_worker_count > 0 )); then
+            eviction_requested=true
+        fi
     fi
     longhorn_node_patch="$(jq -cn \
         --argjson allowed "$allow_control_plane_storage" \
@@ -273,8 +322,13 @@ fi
 
 if kubectl get namespace infra >/dev/null 2>&1; then
     kubectl -n infra create configmap bm-cluster-topology \
-        --from-literal="expectedNodeCount=${EXPECTED_NODE_COUNT:-$ready_node_count}" \
+        --from-literal="expectedNodeCount=${EXPECTED_NODE_COUNT:-$node_count}" \
+        --from-literal="expectedControlPlaneCount=${EXPECTED_CONTROL_PLANE_COUNT:-$control_plane_count}" \
+        --from-literal="nodeCount=$node_count" \
         --from-literal="readyNodeCount=$ready_node_count" \
+        --from-literal="controlPlaneCount=$control_plane_count" \
+        --from-literal="readyControlPlaneCount=$ready_control_plane_count" \
+        --from-literal="workerCount=$worker_count" \
         --from-literal="readyWorkerCount=$ready_worker_count" \
         --from-literal="controlPlaneSchedulable=$CONTROL_PLANE_SCHEDULABLE" \
         --from-literal="longhornReplicaCount=$replica_count" \

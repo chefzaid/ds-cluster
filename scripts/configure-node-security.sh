@@ -13,6 +13,7 @@ source "$NETWORK_LIBRARY"
 APPLY=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 NODE_ROLE="${NODE_ROLE:-control-plane}"
+PRIVATE_CONTROL_PLANE=false
 K3S_NODE_NETWORK_CIDR="${K3S_NODE_NETWORK_CIDR:-}"
 CONTROL_PLANE_IP="${CONTROL_PLANE_IP:-}"
 HARDENED_SSH_PORT="${HARDENED_SSH_PORT:-}"
@@ -21,12 +22,14 @@ SSH_ALLOWED_USERS="${SSH_ALLOWED_USERS:-${SUDO_USER:-$USER}}"
 APT_UPDATED=false
 
 usage() {
-  echo "Usage: $0 [--apply] [--server-exposure internet|local] [--node-role control-plane|worker] [--control-plane-ip PRIVATE_IP] [--ssh-port PORT]"
+  echo "Usage: $0 [--apply] [--server-exposure internet|local] [--node-role control-plane|worker] [--private-control-plane] [--control-plane-ip PRIVATE_IP] [--ssh-port PORT]"
+  echo "  --private-control-plane: join-server policy; private SSH from --control-plane-ip, no public ingress"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --apply) APPLY=true ;;
+    --private-control-plane) PRIVATE_CONTROL_PLANE=true ;;
     --server-exposure)
       shift
       [[ $# -gt 0 ]] || { echo "Missing value for --server-exposure"; usage; exit 1; }
@@ -86,6 +89,10 @@ normalize_node_role() {
     worker|agent) echo "worker" ;;
     *) return 1 ;;
   esac
+}
+
+private_node_policy() {
+  [[ "$NODE_ROLE" == "worker" || "$PRIVATE_CONTROL_PLANE" == "true" ]]
 }
 
 detect_control_plane_cluster_interface() {
@@ -151,7 +158,7 @@ configure_tailscale_firewall_integration() {
   tailscale_ipv4 "$local_tailscale_ip" || \
     err "Refusing to configure UFW: Tailscale has not assigned this node an IPv4 address"
 
-  if [[ "$NODE_ROLE" == "worker" ]]; then
+  if private_node_policy; then
     tailscale_ipv4 "$CONTROL_PLANE_IP" || \
       err "Refusing to configure worker UFW: the control-plane address must be a Tailscale IPv4"
     route="$(ip -4 route get "$CONTROL_PLANE_IP" 2>/dev/null)" || \
@@ -181,7 +188,7 @@ validate_worker_private_ssh_before_firewall() {
   local route route_interface route_source default_interface
   local ssh_client_ip ssh_server_ip ssh_server_port ssh_interface
 
-  [[ "$NODE_ROLE" == "worker" ]] || return 0
+  private_node_policy || return 0
   route="$(ip -4 route get "$CONTROL_PLANE_IP" 2>/dev/null)" || \
     err "Refusing to configure worker UFW: the private control-plane address is not routable"
   route_interface="$(awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}' <<< "$route")"
@@ -198,7 +205,7 @@ validate_worker_private_ssh_before_firewall() {
       err "Refusing to configure worker UFW: OVHcloud vRack traffic uses public default interface $route_interface"
   fi
   [[ -n "${SSH_CONNECTION:-}" ]] || \
-    err "Refusing to configure worker UFW without a proven private SSH session. Run install-worker.sh from the control plane over the selected private transport."
+    err "Refusing to configure private-node UFW without a proven private SSH session. Enroll this node from the control plane over the selected private transport."
   read -r ssh_client_ip _ ssh_server_ip ssh_server_port <<< "$SSH_CONNECTION"
   [[ "$ssh_client_ip" == "$CONTROL_PLANE_IP" ]] || \
     err "Refusing to configure worker UFW: current SSH client $ssh_client_ip is not control plane $CONTROL_PLANE_IP"
@@ -538,7 +545,7 @@ configure_worker_forwarding_guard() {
   local interfaces=("$@")
   local interface
 
-  if [[ "$NODE_ROLE" != "worker" || ${#interfaces[@]} -eq 0 ]]; then
+  if ! private_node_policy || [[ ${#interfaces[@]} -eq 0 ]]; then
     if sudo systemctl cat bm-cluster-worker-ingress-guard.service >/dev/null 2>&1; then
       sudo systemctl disable --now bm-cluster-worker-ingress-guard.service >/dev/null 2>&1 || true
     fi
@@ -589,9 +596,9 @@ EOF
 
   write_root_file /etc/systemd/system/bm-cluster-worker-ingress-guard.service <<'EOF'
 [Unit]
-Description=Block public input and forwarded ingress on bm-cluster workers
+Description=Block public input and forwarded ingress on private bm-cluster nodes
 After=network-pre.target nftables.service ufw.service
-Before=docker.service k3s-agent.service
+Before=docker.service k3s-agent.service k3s.service
 
 [Service]
 Type=oneshot
@@ -618,7 +625,7 @@ configure_ufw() {
 
   ensure_packages ufw
 
-  if [[ "$NODE_ROLE" == "worker" ]]; then
+  if private_node_policy; then
     cluster_interface="$(ip -4 route get "$CONTROL_PLANE_IP" 2>/dev/null | \
       awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}')"
     [[ -n "$cluster_interface" ]] || err "Unable to determine the private interface used to reach $CONTROL_PLANE_IP"
@@ -634,7 +641,7 @@ configure_ufw() {
     err "K3S_NODE_NETWORK_CIDR must be RFC1918 or Tailscale 100.64.0.0/10: $K3S_NODE_NETWORK_CIDR"
   fi
 
-  if [[ "$NODE_ROLE" == "control-plane" ]]; then
+  if [[ "$NODE_ROLE" == "control-plane" ]] && ! private_node_policy; then
     if [[ "$SERVER_EXPOSURE" == "local" ]]; then
       CLOUDFLARE_PROXY_ONLY=false
     elif [[ -z "$CLOUDFLARE_PROXY_ONLY" ]]; then
@@ -646,7 +653,7 @@ configure_ufw() {
     fi
     [[ "$CLOUDFLARE_PROXY_ONLY" =~ ^(true|false)$ ]] || err "CLOUDFLARE_PROXY_ONLY must be true or false"
   else
-    # Worker nodes do not terminate public ingress in this topology.
+    # Workers and additional private control planes do not terminate public ingress.
     CLOUDFLARE_PROXY_ONLY=false
   fi
 
@@ -673,7 +680,7 @@ configure_ufw() {
   sudo ufw logging medium >/dev/null
 
   info "Allowing required inbound ports..."
-  if [[ "$NODE_ROLE" == "control-plane" ]]; then
+  if [[ "$NODE_ROLE" == "control-plane" ]] && ! private_node_policy; then
     # Password SSH remains available on the internet-facing control plane by
     # operator request; CrowdSec and Fail2ban protect it in internet mode.
     sudo ufw allow "$HARDENED_SSH_PORT/tcp" >/dev/null
@@ -688,7 +695,7 @@ configure_ufw() {
       sudo ufw allow 443/tcp >/dev/null
     fi
   else
-    info "Restricting worker SSH to control plane $CONTROL_PLANE_IP on $cluster_interface..."
+    info "Restricting private-node SSH to bootstrap control plane $CONTROL_PLANE_IP on $cluster_interface..."
     sudo ufw allow in on "$cluster_interface" from "$CONTROL_PLANE_IP" to any port "$HARDENED_SSH_PORT" proto tcp comment 'SSH from control plane only' >/dev/null
 
     # Kubernetes NodePort and Docker-published traffic may traverse FORWARD
@@ -703,15 +710,16 @@ configure_ufw() {
     for interface in "${untrusted_interfaces[@]}"; do
       [[ "$interface" == "$cluster_interface" ]] && continue
       [[ "$interface" =~ ^(lo|docker|br-|cni|flannel|veth|tailscale|kube-ipvs) ]] && continue
-      info "Blocking host and forwarded ingress on worker interface $interface..."
-      sudo ufw deny in on "$interface" comment 'No worker provider ingress' >/dev/null
-      sudo ufw route deny in on "$interface" comment 'No worker forwarded ingress' >/dev/null
+      info "Blocking host and forwarded ingress on private-node interface $interface..."
+      sudo ufw deny in on "$interface" comment 'No private-node provider ingress' >/dev/null
+      sudo ufw route deny in on "$interface" comment 'No private-node forwarded ingress' >/dev/null
     done
   fi
   if [[ -n "$K3S_NODE_NETWORK_CIDR" ]]; then
     if [[ "$NODE_ROLE" == "control-plane" ]]; then
-      info "Restricting the K3s API, Flannel, and kubelet traffic to $K3S_NODE_NETWORK_CIDR..."
+      info "Restricting the K3s API, embedded etcd, Flannel, and kubelet traffic to $K3S_NODE_NETWORK_CIDR on $cluster_interface..."
       sudo ufw allow in on "$cluster_interface" from "$K3S_NODE_NETWORK_CIDR" to any port 6443 proto tcp >/dev/null
+      sudo ufw allow in on "$cluster_interface" from "$K3S_NODE_NETWORK_CIDR" to any port 2379:2380 proto tcp comment 'K3s embedded etcd peers' >/dev/null
     else
       info "Restricting worker Flannel and kubelet traffic to $K3S_NODE_NETWORK_CIDR on $cluster_interface..."
     fi
@@ -958,12 +966,15 @@ if [[ "$APPLY" != "true" ]]; then
   exit 0
 fi
 
-if [[ "$NODE_ROLE" == "worker" ]]; then
-  [[ "$SERVER_EXPOSURE" == "local" ]] || err "Internet-facing workers are forbidden; use a local/private worker"
-  [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || err "K3S_NODE_NETWORK_CIDR is required when configuring a worker firewall"
+if [[ "$PRIVATE_CONTROL_PLANE" == "true" && "$NODE_ROLE" != "control-plane" ]]; then
+  err "--private-control-plane requires --node-role control-plane"
+fi
+if private_node_policy; then
+  [[ "$SERVER_EXPOSURE" == "local" ]] || err "Workers and additional private control planes require local/private exposure"
+  [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || err "K3S_NODE_NETWORK_CIDR is required when configuring a private node firewall"
   trusted_private_cidr "$K3S_NODE_NETWORK_CIDR" || \
     err "K3S_NODE_NETWORK_CIDR must be RFC1918 or Tailscale 100.64.0.0/10"
-  [[ -n "$CONTROL_PLANE_IP" ]] || err "CONTROL_PLANE_IP is required so worker SSH can be restricted to the control plane"
+  [[ -n "$CONTROL_PLANE_IP" ]] || err "CONTROL_PLANE_IP is required so private-node SSH can be restricted to the bootstrap control plane"
   trusted_private_ipv4 "$CONTROL_PLANE_IP" || \
     err "CONTROL_PLANE_IP must be an RFC1918 or Tailscale IPv4 address"
   if [[ "$K3S_NODE_NETWORK_CIDR" == "100.64.0.0/10" ]]; then

@@ -37,7 +37,11 @@ WORKER_INSTALLER="$SCRIPT_DIR/install-k3s-worker.sh"
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/configure-k3s-registry-mirror.sh"
 K3S_APPARMOR_PROFILE="$SCRIPT_DIR/../config/apparmor/cri-containerd.apparmor.d"
+LONGHORN_HOST_CONFIGURATOR="$SCRIPT_DIR/configure-longhorn-host.sh"
+LONGHORN_MULTIPATH_CONFIG="$SCRIPT_DIR/../config/multipath/multipath-longhorn.conf"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
+LYNIS_SCHEDULER="$SCRIPT_DIR/configure-lynis-schedule.sh"
+NODE_AUDITOR="$SCRIPT_DIR/audit-cluster-nodes.sh"
 K3S_NETWORK_CONFIGURATOR="$SCRIPT_DIR/configure-k3s-control-plane-network.sh"
 TAILSCALE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
 OVH_VRACK_CONFIGURATOR="$SCRIPT_DIR/configure-ovh-vrack.sh"
@@ -45,6 +49,14 @@ CLUSTER_TOPOLOGY_RECONCILER="$SCRIPT_DIR/reconcile-cluster-topology.sh"
 WORKER_IPS="${K3S_WORKER_IPS:-}"
 WORKER_HOSTS="${K3S_WORKER_HOSTS:-}"
 REQUESTED_WORKER_COUNT="${K3S_WORKER_COUNT:-}"
+ENROLLMENT_ROLE="${K3S_ENROLLMENT_ROLE:-worker}"
+if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+    WORKER_IPS="${K3S_CONTROL_PLANE_IPS:-}"
+    WORKER_HOSTS="${K3S_CONTROL_PLANE_HOSTS:-}"
+    REQUESTED_WORKER_COUNT="${CONTROL_PLANES_TO_ADD:-}"
+fi
+DEFER_TOPOLOGY=false
+EXPECTED_CONTROL_PLANE_COUNT="${CONTROL_PLANE_COUNT:-}"
 CONTROL_PLANE_SCHEDULABLE="${CONTROL_PLANE_SCHEDULABLE:-}"
 NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
 SERVER_URL=""
@@ -92,6 +104,53 @@ control_plane_is_controller_only() {
 }
 
 usage() {
+    if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+        cat <<'EOF'
+Join additional Debian/Ubuntu K3s control planes over private SSH.
+
+Run on an existing embedded-etcd control plane:
+  ./scripts/add-k3s-control-planes.sh --control-plane-count 2
+  ./scripts/add-k3s-control-planes.sh --transport vrack \
+    --control-plane-ips 10.0.0.11,10.0.0.12 --node-network-cidr 10.0.0.0/24 \
+    --control-plane-schedulable false
+
+Control-plane options:
+  --control-plane-count N   Number of additional control planes to enroll
+  --control-plane-ips CSV   Additional preconfigured vRack node addresses
+  --control-plane-hosts CSV Additional Tailscale bootstrap SSH hosts
+  --defer-topology          Let the main installer reconcile after workers join
+  --expected-control-plane-count N
+                            Optional final odd control-plane count (main installer sets it)
+  --control-plane-schedulable true|false|preserve
+                            Scheduling mode (default: inherit existing mode)
+  --transport MODE          vrack for OVHcloud-only, tailscale for hybrid nodes
+  --server-url URL          This server's private IPv4 K3s join endpoint
+  --node-network-cidr CIDR  Trusted RFC1918 subnet or Tailscale 100.64.0.0/10
+  --ssh-user USER           Default SSH user; requires passwordless sudo or root
+  --ssh-port PORT           Default SSH port (22)
+  --identity-file PATH      SSH private key; omitted to use the agent/config
+  --labels CSV              Additional node labels
+  --taints CSV              Additional taints; standard NoSchedule uses scheduling mode
+  --k3s-version VERSION     Must equal this server's exact K3s version
+  --tailscale-api-token-stdin
+                            Read a personal tskey-api access token from stdin
+  --tailscale-tailnet NAME  Tailnet name; "-" uses the token's tailnet
+  --tailscale-mesh NAME     Cluster-specific mesh name
+  --tailscale-hostname NAME This bootstrap control plane's Tailscale hostname
+  --tailscale-key-expiry N  One-use auth-key validity in seconds
+  --non-interactive         Fail instead of prompting; implied by either node list
+  -h, --help                Show this help
+
+The existing server must use embedded etcd. A completed cluster must have an
+odd control-plane count. Server joins use its server token and exact version,
+disable Traefik, enable secrets encryption, and remain private. Already joined
+nodes with matching names, roles, and private IPs are checked and reused.
+Private SSH is proved before the provider-facing firewall is closed. Join
+credentials are transferred through stdin and are never printed or passed as
+process arguments. K3s stores its own root-only service credentials.
+EOF
+        return
+    fi
     cat <<'EOF'
 Add one or more Debian/Ubuntu machines to this K3s cluster as workers.
 
@@ -158,6 +217,15 @@ while [[ $# -gt 0 ]]; do
         --worker-hosts=*)   WORKER_HOSTS="${1#*=}"; NON_INTERACTIVE=true ;;
         --worker-count)     shift; [[ $# -gt 0 ]] || error "Missing worker count"; REQUESTED_WORKER_COUNT="$1" ;;
         --worker-count=*)   REQUESTED_WORKER_COUNT="${1#*=}" ;;
+        --control-plane-ips) shift; [[ $# -gt 0 ]] || error "Missing control-plane IP list"; WORKER_IPS="$1"; NON_INTERACTIVE=true ;;
+        --control-plane-ips=*) WORKER_IPS="${1#*=}"; NON_INTERACTIVE=true ;;
+        --control-plane-hosts) shift; [[ $# -gt 0 ]] || error "Missing control-plane host list"; WORKER_HOSTS="$1"; NON_INTERACTIVE=true ;;
+        --control-plane-hosts=*) WORKER_HOSTS="${1#*=}"; NON_INTERACTIVE=true ;;
+        --control-plane-count) shift; [[ $# -gt 0 ]] || error "Missing additional control-plane count"; REQUESTED_WORKER_COUNT="$1" ;;
+        --control-plane-count=*) REQUESTED_WORKER_COUNT="${1#*=}" ;;
+        --defer-topology) DEFER_TOPOLOGY=true ;;
+        --expected-control-plane-count) shift; [[ $# -gt 0 ]] || error "Missing final control-plane count"; EXPECTED_CONTROL_PLANE_COUNT="$1" ;;
+        --expected-control-plane-count=*) EXPECTED_CONTROL_PLANE_COUNT="${1#*=}" ;;
         --control-plane-schedulable) shift; [[ $# -gt 0 ]] || error "Missing control-plane scheduling mode"; CONTROL_PLANE_SCHEDULABLE="$1" ;;
         --control-plane-schedulable=*) CONTROL_PLANE_SCHEDULABLE="${1#*=}" ;;
         --server-url)       shift; [[ $# -gt 0 ]] || error "Missing value for --server-url"; SERVER_URL="$1" ;;
@@ -196,22 +264,26 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+[[ "$ENROLLMENT_ROLE" =~ ^(worker|control-plane)$ ]] || error "Invalid enrollment role: $ENROLLMENT_ROLE"
 [[ -f "$WORKER_INSTALLER" ]] || error "Worker installer not found: $WORKER_INSTALLER"
 [[ -f "$NETWORK_LIBRARY" ]] || error "Network library not found: $NETWORK_LIBRARY"
 [[ -f "$K3S_APPARMOR_INSTALLER" ]] || error "AppArmor installer not found: $K3S_APPARMOR_INSTALLER"
 [[ -x "$K3S_REGISTRY_MIRROR_SCRIPT" ]] || error "K3s registry mirror configurator not found or not executable: $K3S_REGISTRY_MIRROR_SCRIPT"
 [[ -f "$K3S_APPARMOR_PROFILE" ]] || error "AppArmor profile not found: $K3S_APPARMOR_PROFILE"
+[[ -x "$LONGHORN_HOST_CONFIGURATOR" && -r "$LONGHORN_MULTIPATH_CONFIG" ]] || error "Longhorn host configurator or multipath config is missing."
 [[ -x "$TAILSCALE_CONFIGURATOR" ]] || error "Tailscale configurator not found or not executable: $TAILSCALE_CONFIGURATOR"
 [[ -x "$OVH_VRACK_CONFIGURATOR" ]] || error "OVHcloud vRack configurator not found or not executable: $OVH_VRACK_CONFIGURATOR"
 [[ -x "$CLUSTER_TOPOLOGY_RECONCILER" ]] || error "Cluster topology reconciler not found or not executable: $CLUSTER_TOPOLOGY_RECONCILER"
-[[ -z "$REQUESTED_WORKER_COUNT" || "$REQUESTED_WORKER_COUNT" =~ ^[1-9][0-9]*$ ]] || error "--worker-count must be a positive integer."
+[[ -z "$REQUESTED_WORKER_COUNT" || "$REQUESTED_WORKER_COUNT" =~ ^[1-9][0-9]*$ ]] || error "Requested $ENROLLMENT_ROLE count must be a positive integer."
 command -v ssh >/dev/null 2>&1 || error "ssh is required."
 command -v scp >/dev/null 2>&1 || error "scp is required."
 command -v kubectl >/dev/null 2>&1 || error "kubectl is required; run this script on a configured control-plane node."
 command -v jq >/dev/null 2>&1 || error "jq is required."
 kubectl cluster-info >/dev/null 2>&1 || error "Cannot reach the Kubernetes API with the current kubeconfig."
 if [[ -z "$CONTROL_PLANE_SCHEDULABLE" ]]; then
-    if control_plane_is_controller_only; then
+    if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+        CONTROL_PLANE_SCHEDULABLE=preserve
+    elif control_plane_is_controller_only; then
         CONTROL_PLANE_SCHEDULABLE=false
         info "The control plane is already controller-only; preserving NoSchedule without another question."
     else
@@ -241,6 +313,20 @@ if [[ $EUID -ne 0 ]]; then
     LOCAL_SUDO=(sudo)
 fi
 
+if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+    "${LOCAL_SUDO[@]}" test -d /var/lib/rancher/k3s/server/db/etcd/member || \
+        error "Additional control planes require embedded etcd; rerun install-control-plane.sh with the desired odd control-plane count first."
+    # New nodes must inherit an actual scheduling mode even when the caller
+    # asks to preserve the existing cluster's scheduling policy.
+    JOIN_CONTROL_PLANE_SCHEDULABLE="$CONTROL_PLANE_SCHEDULABLE"
+    if [[ "$JOIN_CONTROL_PLANE_SCHEDULABLE" == "preserve" ]]; then
+        JOIN_CONTROL_PLANE_SCHEDULABLE=true
+        if control_plane_is_controller_only; then
+            JOIN_CONTROL_PLANE_SCHEDULABLE=false
+        fi
+    fi
+fi
+
 select_transport() {
     installer_select_node_transport NODE_TRANSPORT "$NODE_TRANSPORT" vrack "$NON_INTERACTIVE" || \
         error "Set --transport to vrack or tailscale."
@@ -261,8 +347,8 @@ detect_private_ip() {
 }
 
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
-    installer_prompt_section "Private worker transport" \
-        "Use one transport consistently for this control plane and all workers."
+    installer_prompt_section "Private $ENROLLMENT_ROLE transport" \
+        "Use one transport consistently for every cluster node."
 fi
 select_transport
 if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
@@ -306,17 +392,21 @@ fi
 if [[ -z "$K3S_VERSION" ]] && command -v k3s >/dev/null 2>&1; then
     K3S_VERSION="$(k3s --version 2>/dev/null | awk 'NR == 1 {print $3}')"
 fi
+if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+    bootstrap_version="$(k3s --version 2>/dev/null | awk 'NR == 1 {print $3}')"
+    [[ -n "$bootstrap_version" && "$K3S_VERSION" == "$bootstrap_version" ]] || \
+        error "Control-plane joins must use the bootstrap server's exact K3s version ($bootstrap_version)."
+fi
 
-printf '%s\n' \
-    "K3s worker enrollment" \
-    "Token commands on the control-plane node:" \
-    "  sudo cat /var/lib/rancher/k3s/server/node-token" \
-    "  sudo k3s token create --ttl 1h --description worker-join"
+info "K3s $ENROLLMENT_ROLE enrollment"
+TOKEN_FILE=/var/lib/rancher/k3s/server/node-token
+[[ "$ENROLLMENT_ROLE" != "control-plane" ]] || TOKEN_FILE=/var/lib/rancher/k3s/server/token
+printf 'Token command on the control-plane node:\n  sudo cat %s\n' "$TOKEN_FILE"
 
-if [[ -r /var/lib/rancher/k3s/server/node-token ]]; then
-    JOIN_TOKEN="$(< /var/lib/rancher/k3s/server/node-token)"
-elif [[ ${#LOCAL_SUDO[@]} -gt 0 ]] && "${LOCAL_SUDO[@]}" test -r /var/lib/rancher/k3s/server/node-token; then
-    JOIN_TOKEN="$("${LOCAL_SUDO[@]}" cat /var/lib/rancher/k3s/server/node-token)"
+if [[ -r "$TOKEN_FILE" ]]; then
+    JOIN_TOKEN="$(< "$TOKEN_FILE")"
+elif [[ ${#LOCAL_SUDO[@]} -gt 0 ]] && "${LOCAL_SUDO[@]}" test -r "$TOKEN_FILE"; then
+    JOIN_TOKEN="$("${LOCAL_SUDO[@]}" cat "$TOKEN_FILE")"
 elif [[ -n "${K3S_JOIN_TOKEN:-}" ]]; then
     JOIN_TOKEN="$K3S_JOIN_TOKEN"
 else
@@ -335,33 +425,35 @@ cleanup_credentials() {
 trap cleanup_credentials EXIT HUP INT TERM
 
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
-    installer_prompt_section "Worker enrollment defaults" \
-        "These connection, network, label, and version values apply to every worker."
+    installer_prompt_section "$ENROLLMENT_ROLE enrollment defaults" \
+        "These connection, network, label, and version values apply to every new node."
     installer_prompt_value SERVER_URL "K3s URL using this control plane's private IPv4 address" "$SERVER_URL"
-    installer_prompt_value SSH_USER "Default worker SSH user" "$SSH_USER"
-    installer_prompt_value SSH_PORT "Worker SSH port" "$SSH_PORT"
+    installer_prompt_value SSH_USER "Default $ENROLLMENT_ROLE SSH user" "$SSH_USER"
+    installer_prompt_value SSH_PORT "$ENROLLMENT_ROLE SSH port" "$SSH_PORT"
     installer_prompt_value IDENTITY_FILE "SSH private key path (blank for agent/config)" "$IDENTITY_FILE"
     [[ -z "$IDENTITY_FILE" || -f "$IDENTITY_FILE" ]] || error "SSH identity file does not exist: $IDENTITY_FILE"
     if [[ "$NODE_TRANSPORT" == "vrack" ]]; then
         installer_prompt_value NODE_NETWORK_CIDR "Trusted vRack/private node CIDR (e.g. 10.0.0.0/24)" "$NODE_NETWORK_CIDR"
     fi
-    installer_prompt_value COMMON_LABELS "Labels for every worker, comma-separated (optional)" "$COMMON_LABELS"
-    installer_prompt_value COMMON_TAINTS "Taints for every worker, comma-separated (optional)" "$COMMON_TAINTS"
-    installer_prompt_value K3S_VERSION "Exact worker K3s version" "$K3S_VERSION"
+    installer_prompt_value COMMON_LABELS "Labels for every new node, comma-separated (optional)" "$COMMON_LABELS"
+    installer_prompt_value COMMON_TAINTS "Additional taints for every new node, comma-separated (optional)" "$COMMON_TAINTS"
+    if [[ "$ENROLLMENT_ROLE" == "worker" ]]; then
+        installer_prompt_value K3S_VERSION "Exact worker K3s version" "$K3S_VERSION"
+    fi
     while [[ -z "$NODE_NETWORK_CIDR" ]]; do
         installer_prompt_value NODE_NETWORK_CIDR "Trusted private node CIDR required for worker UFW (e.g. 10.0.0.0/24)"
     done
 
     worker_count="$REQUESTED_WORKER_COUNT"
     while [[ ! "$worker_count" =~ ^[1-9][0-9]*$ ]]; do
-        installer_prompt_value worker_count "Number of workers to add"
+        installer_prompt_value worker_count "Number of $ENROLLMENT_ROLE nodes to add"
         [[ "$worker_count" =~ ^[1-9][0-9]*$ ]] || warn "Enter a positive whole number."
     done
 else
     if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
-        [[ -n "$WORKER_HOSTS" ]] || error "--worker-hosts is required for non-interactive Tailscale enrollment."
+        [[ -n "$WORKER_HOSTS" ]] || error "--${ENROLLMENT_ROLE}-hosts is required for non-interactive Tailscale enrollment."
     else
-        [[ -n "$WORKER_IPS" ]] || error "--worker-ips is required for non-interactive vRack enrollment."
+        [[ -n "$WORKER_IPS" ]] || error "--${ENROLLMENT_ROLE}-ips is required for non-interactive vRack enrollment."
     fi
 fi
 [[ -n "$SERVER_URL" ]] || error "Could not detect the control-plane address; provide --server-url."
@@ -403,6 +495,9 @@ if command -v ufw >/dev/null 2>&1 && "${LOCAL_SUDO[@]}" ufw status | grep -q '^S
     info "Allowing K3s node traffic from $NODE_NETWORK_CIDR on the control plane..."
     "${LOCAL_SUDO[@]}" sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
     "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 6443 proto tcp >/dev/null
+    if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+        "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 2379:2380 proto tcp comment 'K3s embedded etcd' >/dev/null
+    fi
     "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 8472 proto udp >/dev/null
     "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 10250 proto tcp >/dev/null
     "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 2049 proto tcp comment 'Longhorn RWX' >/dev/null
@@ -507,7 +602,7 @@ provision_vrack_target() {
     done
     [[ "$reachable" == "true" ]] || \
         error "Private SSH did not become reachable at $private_target; bootstrap SSH remains available at $bootstrap_target and UFW was not changed."
-    info "Private SSH is proven through $configured_interface; worker UFW may now close public ingress."
+    info "Private SSH is proven through $configured_interface; node UFW may now close public ingress."
     VRACK_TARGET="$private_target"
 }
 
@@ -535,16 +630,16 @@ provision_tailscale_target() {
     remote_script="$remote_dir/configure-tailscale.sh"
     printf -v quoted_script '%q' "$remote_script"
 
-    info "Creating a one-use Tailscale worker key for $TAILSCALE_NODE_NAME."
+    info "Creating a one-use Tailscale $ENROLLMENT_ROLE key for $TAILSCALE_NODE_NAME."
     node_auth_key="$(printf '%s\n' "$TAILSCALE_API_TOKEN" | \
-        "$TAILSCALE_CONFIGURATOR" --role worker \
+        "$TAILSCALE_CONFIGURATOR" --role "$ENROLLMENT_ROLE" \
             --tailnet "$TAILSCALE_TAILNET" --mesh-name "$TAILSCALE_MESH_NAME" \
             --auth-key-expiry "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS" \
             --create-auth-key --api-token-stdin)"
     [[ "$node_auth_key" =~ ^tskey-auth-[A-Za-z0-9_-]+$ ]] || error "Could not create a Tailscale worker auth key."
     info "Installing and connecting Tailscale on $bootstrap_target."
     if ! worker_ip="$(printf '%s\n' "$node_auth_key" | ssh "${ssh_options[@]}" "$bootstrap_target" \
-        "chmod 700 $quoted_script && $quoted_script --role worker --tailnet $(printf '%q' "$TAILSCALE_TAILNET") --mesh-name $(printf '%q' "$TAILSCALE_MESH_NAME") --hostname $(printf '%q' "$TAILSCALE_NODE_NAME") --auth-key-stdin")"; then
+        "chmod 700 $quoted_script && $quoted_script --role $(printf '%q' "$ENROLLMENT_ROLE") --tailnet $(printf '%q' "$TAILSCALE_TAILNET") --mesh-name $(printf '%q' "$TAILSCALE_MESH_NAME") --hostname $(printf '%q' "$TAILSCALE_NODE_NAME") --auth-key-stdin")"; then
         node_auth_key=""
         ssh "${ssh_options[@]}" "$bootstrap_target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
         error "Tailscale provisioning failed on $bootstrap_target."
@@ -553,7 +648,7 @@ provision_tailscale_target() {
     worker_ip="$(awk 'NF {value=$0} END {print value}' <<< "$worker_ip")"
     tailscale_ipv4 "$worker_ip" || error "The worker did not return a valid Tailscale IPv4 address: ${worker_ip:-none}"
     printf '%s\n' "$TAILSCALE_API_TOKEN" | \
-        "$TAILSCALE_CONFIGURATOR" --role worker \
+        "$TAILSCALE_CONFIGURATOR" --role "$ENROLLMENT_ROLE" \
             --tailnet "$TAILSCALE_TAILNET" --mesh-name "$TAILSCALE_MESH_NAME" \
             --tag-ip "$worker_ip" --api-token-stdin >/dev/null
     ssh "${ssh_options[@]}" "$bootstrap_target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
@@ -601,12 +696,70 @@ remote_hostname() {
     ssh "${ssh_options[@]}" "$1" "hostname -s | tr '[:upper:]' '[:lower:]'"
 }
 
+preflight_control_plane_count() {
+    [[ "$ENROLLMENT_ROLE" == "control-plane" ]] || return 0
+    local nodes current_count new_count=0 planned_count host node_name existing_role selected_list
+    local -a selected_hosts=()
+    local -A seen_targets=()
+    nodes="$(kubectl get nodes -o json)"
+    current_count="$(jq '[.items[] | select(.metadata.labels | has("node-role.kubernetes.io/control-plane") or has("node-role.kubernetes.io/master"))] | length' <<< "$nodes")"
+    if [[ "$NON_INTERACTIVE" == "true" ]]; then
+        selected_list="$WORKER_IPS"
+        [[ "$NODE_TRANSPORT" != "tailscale" ]] || selected_list="$WORKER_HOSTS"
+        [[ "$selected_list" != ,* && "$selected_list" != *, && "$selected_list" != *,,* ]] || \
+            error "Control-plane host list contains an empty item."
+        IFS=',' read -r -a selected_hosts <<< "$selected_list"
+        [[ -z "$REQUESTED_WORKER_COUNT" || ${#selected_hosts[@]} -eq "$REQUESTED_WORKER_COUNT" ]] || \
+            error "The control-plane host list must contain exactly $REQUESTED_WORKER_COUNT entries."
+        for host in "${selected_hosts[@]}"; do
+            host="${host#"${host%%[![:space:]]*}"}"
+            host="${host%"${host##*[![:space:]]}"}"
+            [[ -n "$host" ]] || error "Control-plane host list contains an empty item."
+            if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+                check_bootstrap_target "$(build_target "$host")"
+                node_name="$(remote_hostname "$(build_target "$host")")"
+                [[ -n "$node_name" ]] || error "Could not determine the hostname of $host."
+                existing_role="$(jq -r --arg name "$node_name" '.items[] | select(.metadata.name == $name) | if (.metadata.labels | has("node-role.kubernetes.io/control-plane") or has("node-role.kubernetes.io/master")) then "control-plane" else "worker" end' <<< "$nodes")"
+            else
+                if ! trusted_private_ipv4 "$host" || tailscale_ipv4 "$host"; then
+                    error "Invalid vRack control-plane IP: $host"
+                fi
+                cidr_contains_ip "$NODE_NETWORK_CIDR" "$host" || error "$host is outside $NODE_NETWORK_CIDR."
+                [[ "$host" != "$SERVER_PRIVATE_IP" ]] || error "The bootstrap control plane cannot enroll itself."
+                node_name="$host"
+                existing_role="$(jq -r --arg ip "$host" '.items[] | select(any(.status.addresses[]?; .type == "InternalIP" and .address == $ip)) | if (.metadata.labels | has("node-role.kubernetes.io/control-plane") or has("node-role.kubernetes.io/master")) then "control-plane" else "worker" end' <<< "$nodes")"
+            fi
+            [[ -z "${seen_targets[$node_name]:-}" ]] || error "Duplicate control-plane enrollment target: $node_name"
+            seen_targets["$node_name"]=1
+            [[ -z "$existing_role" || "$existing_role" == "control-plane" ]] || error "Target $host is already registered as a worker."
+            [[ -n "$existing_role" ]] || new_count=$((new_count + 1))
+        done
+    else
+        # Interactive counts describe new servers. List-based reruns above can
+        # include already joined nodes and count only genuinely new members.
+        new_count="$worker_count"
+    fi
+    planned_count=$((current_count + new_count))
+    (( planned_count % 2 == 1 )) || \
+        error "This selection would leave $planned_count control planes; choose an odd final count (1, 3, 5, ...)."
+    if [[ -n "$EXPECTED_CONTROL_PLANE_COUNT" ]]; then
+        if [[ ! "$EXPECTED_CONTROL_PLANE_COUNT" =~ ^[1-9][0-9]*$ ]] || (( EXPECTED_CONTROL_PLANE_COUNT % 2 != 1 )); then
+            error "The expected final control-plane count must be a positive odd integer."
+        fi
+        [[ "$planned_count" -eq "$EXPECTED_CONTROL_PLANE_COUNT" ]] || \
+            error "The selected targets produce $planned_count control planes, but $EXPECTED_CONTROL_PLANE_COUNT were requested."
+    fi
+    EXPECTED_CONTROL_PLANE_COUNT="$planned_count"
+    info "Validated control-plane plan: $current_count existing + $new_count new = $planned_count total."
+}
+
 install_worker() {
     local target="$1" node_name="$2" node_ip="$3" labels="$4" taints="$5" control_plane_ip="$6"
     local remote_dir="" remote_installer="" remote_hardener=""
-    local remote_command quoted quoted_dir quoted_installer quoted_hardener argument
+    local remote_command quoted quoted_dir quoted_installer quoted_hardener argument existing_node existing_role registered_ip
     local worker_args=(
         --non-interactive
+        --node-role "$ENROLLMENT_ROLE"
         --transport "$NODE_TRANSPORT"
         --server-url "$SERVER_URL"
         --token-stdin
@@ -614,6 +767,35 @@ install_worker() {
         --ssh-port "$SSH_PORT"
         --control-plane-ip "$control_plane_ip"
     )
+
+    [[ "$node_name" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ && ${#node_name} -le 253 ]] || \
+        error "Invalid Kubernetes node name: $node_name"
+    [[ "$node_ip" != "$SERVER_PRIVATE_IP" ]] || error "The bootstrap control plane cannot enroll itself."
+    existing_node="$(kubectl get nodes -o json | jq -c --arg name "$node_name" --arg ip "$node_ip" '
+        [.items[] | select(.metadata.name == $name or any(.status.addresses[]?; .type == "InternalIP" and .address == $ip))]')"
+    if [[ "$(jq length <<< "$existing_node")" -gt 0 ]]; then
+        [[ "$(jq length <<< "$existing_node")" -eq 1 && "$(jq -r '.[0].metadata.name' <<< "$existing_node")" == "$node_name" ]] || \
+            error "Node name/IP collision for $node_name ($node_ip); resolve the existing registration first."
+        existing_role="$(jq -r '.[0] | if (.metadata.labels | has("node-role.kubernetes.io/control-plane") or has("node-role.kubernetes.io/master")) then "control-plane" else "worker" end' <<< "$existing_node")"
+        registered_ip="$(jq -r '.[0].status.addresses[]? | select(.type == "InternalIP") | .address' <<< "$existing_node")"
+        [[ "$existing_role" == "$ENROLLMENT_ROLE" && "$registered_ip" == "$node_ip" ]] || \
+            error "Existing node $node_name has role $existing_role and IP $registered_ip; refusing to replace it with $ENROLLMENT_ROLE at $node_ip."
+        if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+            ssh "${ssh_options[@]}" "$target" 'systemctl is-active --quiet k3s' || \
+                error "Existing control plane $node_name is not running K3s; repair it before enrollment."
+            [[ "$(ssh "${ssh_options[@]}" "$target" "k3s --version | awk 'NR == 1 {print \$3}'")" == "$K3S_VERSION" ]] || \
+                error "Existing control plane $node_name uses a different K3s version; upgrade servers together."
+            kubectl wait --for=condition=Ready "node/$node_name" --timeout=5m
+            kubectl label "node/$node_name" svccontroller.k3s.cattle.io/enablelb=false \
+                node.bm-cluster.io/role=control-plane node.bm-cluster.io/exposure=local --overwrite >/dev/null
+            info "Control plane '$node_name' already belongs to this cluster; keeping its existing server configuration."
+            return 0
+        fi
+    fi
+    if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+        worker_args+=(--control-plane-schedulable "$JOIN_CONTROL_PLANE_SCHEDULABLE")
+    fi
+    [[ -z "${PLATFORM_DOMAIN:-}" ]] || worker_args+=(--domain "$PLATFORM_DOMAIN")
 
     [[ "$NODE_TRANSPORT" != "tailscale" ]] || worker_args+=(--tailscale-ready)
 
@@ -625,12 +807,19 @@ install_worker() {
     remote_dir="$(ssh "${ssh_options[@]}" "$target" 'mktemp -d /tmp/bm-cluster-worker.XXXXXX')"
     [[ "$remote_dir" == /tmp/bm-cluster-worker.* ]] || error "Could not create a safe temporary directory on $target."
     printf -v quoted_dir '%q' "$remote_dir"
-    ssh "${ssh_options[@]}" "$target" "mkdir -m 700 $quoted_dir/scripts $quoted_dir/scripts/lib $quoted_dir/apparmor"
-    info "Copying the worker installer and enforced AppArmor profile to $target..."
+    ssh "${ssh_options[@]}" "$target" "mkdir -m 700 $quoted_dir/scripts $quoted_dir/scripts/lib $quoted_dir/config $quoted_dir/config/apparmor $quoted_dir/config/multipath"
+    info "Copying the $ENROLLMENT_ROLE installer and enforced AppArmor profile to $target..."
     scp "${scp_options[@]}" "$WORKER_INSTALLER" "$K3S_APPARMOR_INSTALLER" "$K3S_REGISTRY_MIRROR_SCRIPT" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$TAILSCALE_CONFIGURATOR" "$OVH_VRACK_CONFIGURATOR" "$target:$remote_dir/scripts/"
-    scp "${scp_options[@]}" "$NETWORK_LIBRARY" "$TRANSPORT_GUIDE_LIBRARY" "$target:$remote_dir/scripts/lib/"
-    scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/apparmor/"
+    scp "${scp_options[@]}" "$NETWORK_LIBRARY" "$PROMPT_LIBRARY" "$TRANSPORT_GUIDE_LIBRARY" "$target:$remote_dir/scripts/lib/"
+    scp "${scp_options[@]}" "$K3S_NETWORK_CONFIGURATOR" "$target:$remote_dir/scripts/"
+    scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/config/apparmor/"
+    scp "${scp_options[@]}" "$LONGHORN_HOST_CONFIGURATOR" "$target:$remote_dir/scripts/"
+    scp "${scp_options[@]}" "$LONGHORN_MULTIPATH_CONFIG" "$target:$remote_dir/config/multipath/"
+    if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+        scp "${scp_options[@]}" "$LYNIS_SCHEDULER" "$NODE_AUDITOR" "$target:$remote_dir/scripts/"
+        ssh "${ssh_options[@]}" "$target" "chmod 700 $(printf '%q' "$remote_dir/scripts/configure-lynis-schedule.sh") $(printf '%q' "$remote_dir/scripts/audit-cluster-nodes.sh")"
+    fi
     info "Copying the worker host-security policy to $target..."
     scp "${scp_options[@]}" "$SECURITY_HARDENER" "$target:$remote_dir/scripts/"
     remote_installer="$remote_dir/scripts/install-k3s-worker.sh"
@@ -639,7 +828,7 @@ install_worker() {
     remote_command="chmod 700 $quoted_installer && $quoted_installer"
     remote_hardener="$remote_dir/scripts/configure-node-security.sh"
     printf -v quoted_hardener '%q' "$remote_hardener"
-    remote_command="chmod 700 $quoted_installer $quoted_hardener $(printf '%q' "$remote_dir/scripts/configure-k3s-registry-mirror.sh") $(printf '%q' "$remote_dir/scripts/configure-tailscale.sh") $(printf '%q' "$remote_dir/scripts/configure-ovh-vrack.sh") && $quoted_installer"
+    remote_command="chmod 700 $quoted_installer $quoted_hardener $(printf '%q' "$remote_dir/scripts/configure-k3s-apparmor.sh") $(printf '%q' "$remote_dir/scripts/configure-longhorn-host.sh") $(printf '%q' "$remote_dir/scripts/configure-k3s-registry-mirror.sh") $(printf '%q' "$remote_dir/scripts/configure-tailscale.sh") $(printf '%q' "$remote_dir/scripts/configure-ovh-vrack.sh") $(printf '%q' "$remote_dir/scripts/configure-k3s-control-plane-network.sh") && $quoted_installer"
     for argument in "${worker_args[@]}"; do
         printf -v quoted '%q' "$argument"
         remote_command+=" $quoted"
@@ -648,11 +837,11 @@ install_worker() {
     info "Installing '$node_name' through $target..."
     if ! printf '%s\n' "$JOIN_TOKEN" | ssh "${ssh_options[@]}" "$target" "$remote_command"; then
         ssh "${ssh_options[@]}" "$target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
-        error "Worker installation failed on $target."
+        error "$ENROLLMENT_ROLE installation failed on $target."
     fi
     ssh "${ssh_options[@]}" "$target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
 
-    info "Confirming a fresh private SSH connection after worker UFW was enabled..."
+    info "Confirming a fresh private SSH connection after $ENROLLMENT_ROLE UFW was enabled..."
     check_target "$target" "$node_ip"
 
     info "Waiting for Kubernetes node '$node_name' to become Ready..."
@@ -664,18 +853,24 @@ install_worker() {
         fi
         sleep 2
     done
-    [[ "$node_registered" == "true" ]] || error "Worker '$node_name' did not register within 60 seconds."
+    [[ "$node_registered" == "true" ]] || error "$ENROLLMENT_ROLE '$node_name' did not register within 60 seconds."
     kubectl wait --for=condition=Ready "node/$node_name" --timeout=5m
     kubectl label "node/$node_name" \
-        node.bm-cluster.io/role=worker \
+        "node.bm-cluster.io/role=$ENROLLMENT_ROLE" \
         node.bm-cluster.io/exposure=local \
         --overwrite >/dev/null
-    kubectl label "node/$node_name" svccontroller.k3s.cattle.io/enablelb- >/dev/null 2>&1 || true
+    if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+        kubectl label "node/$node_name" svccontroller.k3s.cattle.io/enablelb=false --overwrite >/dev/null
+    else
+        kubectl label "node/$node_name" svccontroller.k3s.cattle.io/enablelb- >/dev/null 2>&1 || true
+    fi
 }
 
 DEFAULT_WORKER_SSH_USER="$SSH_USER"
 DEFAULT_WORKER_SSH_PORT="$SSH_PORT"
 DEFAULT_WORKER_IDENTITY_FILE="$IDENTITY_FILE"
+
+preflight_control_plane_count
 
 if [[ "$NON_INTERACTIVE" == "true" ]]; then
     if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
@@ -683,11 +878,16 @@ if [[ "$NON_INTERACTIVE" == "true" ]]; then
     else
         IFS=',' read -r -a hosts <<< "$WORKER_IPS"
     fi
-    [[ ${#hosts[@]} -gt 0 ]] || error "No worker hosts were provided."
+    [[ ${#hosts[@]} -gt 0 ]] || error "No $ENROLLMENT_ROLE hosts were provided."
+    [[ -z "$REQUESTED_WORKER_COUNT" || ${#hosts[@]} -eq "$REQUESTED_WORKER_COUNT" ]] || \
+        error "The $ENROLLMENT_ROLE host list must contain exactly $REQUESTED_WORKER_COUNT entries."
+    declare -A seen_hosts=()
     for host in "${hosts[@]}"; do
         host="${host#"${host%%[![:space:]]*}"}"
         host="${host%"${host##*[![:space:]]}"}"
-        [[ -n "$host" ]] || error "Worker host list contains an empty item."
+        [[ -n "$host" ]] || error "$ENROLLMENT_ROLE host list contains an empty item."
+        [[ -z "${seen_hosts[$host]:-}" ]] || error "Duplicate enrollment host: $host"
+        seen_hosts["$host"]=1
         if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
             bootstrap_target="$(build_target "$host")"
             provision_tailscale_target "$bootstrap_target"
@@ -710,7 +910,7 @@ if [[ "$NON_INTERACTIVE" == "true" ]]; then
     done
 else
     for ((index=1; index<=worker_count; index++)); do
-        installer_prompt_section "Worker $index of $worker_count" \
+        installer_prompt_section "$ENROLLMENT_ROLE $index of $worker_count" \
             "Configure this server's SSH bootstrap, private network, and Kubernetes identity."
         worker_host=""
         if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
@@ -756,13 +956,13 @@ else
             detected_name="$(remote_hostname "$bootstrap_target")"
             ovh_server=""
             if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
-                installer_prompt_value ovh_server "OVHcloud Dedicated Server service name for this worker"
+                installer_prompt_value ovh_server "OVHcloud Dedicated Server service name for this $ENROLLMENT_ROLE"
             fi
             worker_host=""
             private_interface=""
             private_interface_mac=""
             vlan_id=""
-            installer_prompt_value worker_host "Unique worker vRack RFC1918 address"
+            installer_prompt_value worker_host "Unique $ENROLLMENT_ROLE vRack RFC1918 address"
             if ! trusted_private_ipv4 "$worker_host" || tailscale_ipv4 "$worker_host"; then
                 error "vRack worker IP must be an RFC1918 IPv4 literal: $worker_host"
             fi
@@ -791,9 +991,18 @@ else
     done
 fi
 
-"$CLUSTER_TOPOLOGY_RECONCILER" \
-    --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE" \
-    --update-longhorn-helm
+if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+    final_control_planes="$(kubectl get nodes -o json | jq '[.items[] | select(.metadata.labels | has("node-role.kubernetes.io/control-plane") or has("node-role.kubernetes.io/master"))] | length')"
+    (( final_control_planes % 2 == 1 )) || \
+        error "Enrollment left $final_control_planes control planes; complete the remaining joins to restore an odd etcd membership."
+    [[ "$final_control_planes" -eq "$EXPECTED_CONTROL_PLANE_COUNT" ]] || \
+        error "Expected $EXPECTED_CONTROL_PLANE_COUNT control planes after enrollment, found $final_control_planes."
+fi
+if [[ "$DEFER_TOPOLOGY" != "true" ]]; then
+    "$CLUSTER_TOPOLOGY_RECONCILER" \
+        --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE" \
+        --update-longhorn-helm
+fi
 
-info "Worker enrollment complete."
+info "$ENROLLMENT_ROLE enrollment complete."
 kubectl get nodes -o wide

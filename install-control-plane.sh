@@ -29,6 +29,8 @@ if [[ ! -r "$PROMPT_LIBRARY" ]]; then
 fi
 # shellcheck source=scripts/lib/installer-prompts.sh
 source "$PROMPT_LIBRARY"
+# shellcheck source=scripts/lib/cluster-plan.sh
+source "$SCRIPT_DIR/scripts/lib/cluster-plan.sh"
 TRANSPORT_GUIDE_LIBRARY="$SCRIPT_DIR/scripts/lib/transport-guide.sh"
 if [[ ! -r "$TRANSPORT_GUIDE_LIBRARY" ]]; then
     echo "[ERROR] Shared transport guide not found: $TRANSPORT_GUIDE_LIBRARY" >&2
@@ -53,6 +55,8 @@ VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
 CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
 WORKER_INSTALLER_SCRIPT="$SCRIPT_DIR/install-worker.sh"
+CONTROL_PLANE_ENROLLMENT_SCRIPT="$SCRIPT_DIR/scripts/add-k3s-control-planes.sh"
+K3S_HA_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-ha.sh"
 K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
 GITLAB_CI_SCRIPT="$SCRIPT_DIR/scripts/configure-gitlab-ci.sh"
 GITLAB_TOKEN_LIBRARY="$SCRIPT_DIR/scripts/lib/gitlab-admin-token.sh"
@@ -129,9 +133,11 @@ CLOUDFLARE_ZONE="${CLOUDFLARE_ZONE:-${DEFAULT_CLOUDFLARE_ZONE:-}}"
 CLOUDFLARE_NODE_DNS_LABEL="${CLOUDFLARE_NODE_DNS_LABEL:-$DEFAULT_CLOUDFLARE_NODE_DNS_LABEL}"
 CLOUDFLARE_ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-${DEFAULT_CLOUDFLARE_ACCESS_TEAM_NAME:-}}"
 CLUSTER_NODE_COUNT="${CLUSTER_NODE_COUNT:-}"
+CONTROL_PLANE_COUNT="${CONTROL_PLANE_COUNT:-}"
 CONTROL_PLANE_SCHEDULABLE="${CONTROL_PLANE_SCHEDULABLE:-}"
 PLANNED_WORKER_COUNT=0
 WORKERS_TO_ADD=0
+CONTROL_PLANES_TO_ADD=0
 
 IFS=',' read -r -a FOUNDATION_MANIFEST_ARRAY <<< "$FOUNDATION_MANIFESTS"
 IFS=',' read -r -a DATASTORE_MANIFEST_ARRAY <<< "$DATASTORE_MANIFESTS"
@@ -213,92 +219,6 @@ prompt_cluster_identity() {
     export PLATFORM_DOMAIN INTERNAL_DNS_ZONE CONTROL_PLANE_NODE_NAME CLOUDFLARE_ZONE CLOUDFLARE_NODE_DNS_LABEL CLOUDFLARE_ACCESS_TEAM_NAME
     export K3S_REGISTRY_HOST TAILSCALE_NODE_HOSTNAME
     info "Cluster identity: node $CONTROL_PLANE_NODE_NAME, public domain $PLATFORM_DOMAIN, private domain $INTERNAL_DNS_ZONE"
-}
-
-configured_worker_target_count() {
-    local targets="${K3S_WORKER_HOSTS:-${K3S_WORKER_IPS:-}}"
-
-    [[ -n "$targets" ]] || { printf '0\n'; return; }
-    tr ',' '\n' <<< "$targets" | sed '/^[[:space:]]*$/d' | wc -l | tr -d '[:space:]'
-}
-
-ready_cluster_node_count() {
-    local nodes
-
-    command -v kubectl >/dev/null 2>&1 || { printf '0\n'; return; }
-    nodes="$(kubectl get nodes --no-headers 2>/dev/null)" || { printf '0\n'; return; }
-    awk '$2 ~ /^Ready/ {count++} END {print count+0}' <<< "$nodes"
-}
-
-ready_cluster_worker_count() {
-    local nodes
-
-    command -v kubectl >/dev/null 2>&1 || { printf '0\n'; return; }
-    nodes="$(kubectl get nodes \
-        -l '!node-role.kubernetes.io/control-plane,!node-role.kubernetes.io/master' \
-        --no-headers 2>/dev/null)" || { printf '0\n'; return; }
-    awk '$2 ~ /^Ready/ {count++} END {print count+0}' <<< "$nodes"
-}
-
-configure_cluster_topology_plan() {
-    local configured_workers existing_nodes existing_workers default_node_count
-    local control_plane_default
-
-    configured_workers="$(configured_worker_target_count)"
-    existing_nodes="$(ready_cluster_node_count || printf '0')"
-    existing_workers="$(ready_cluster_worker_count || printf '0')"
-    default_node_count="$existing_nodes"
-    (( default_node_count >= 1 )) || default_node_count=1
-    (( configured_workers == 0 )) || default_node_count=$((configured_workers + 1))
-
-    if [[ "$AUTO_APPROVE" != "true" ]]; then
-        while true; do
-            installer_prompt_value CLUSTER_NODE_COUNT \
-                "Total number of cluster nodes, including the control plane" \
-                "${CLUSTER_NODE_COUNT:-$default_node_count}"
-            [[ "$CLUSTER_NODE_COUNT" =~ ^[1-9][0-9]*$ ]] && break
-            warn "Enter a positive whole number."
-        done
-    else
-        CLUSTER_NODE_COUNT="${CLUSTER_NODE_COUNT:-$default_node_count}"
-    fi
-    [[ "$CLUSTER_NODE_COUNT" =~ ^[1-9][0-9]*$ ]] || \
-        error "CLUSTER_NODE_COUNT must be a positive integer."
-    if (( existing_nodes > CLUSTER_NODE_COUNT )); then
-        error "The cluster already has $existing_nodes Ready nodes; this installer does not remove nodes."
-    fi
-
-    PLANNED_WORKER_COUNT=$((CLUSTER_NODE_COUNT - 1))
-    WORKERS_TO_ADD=$((PLANNED_WORKER_COUNT - existing_workers))
-    (( WORKERS_TO_ADD >= 0 )) || WORKERS_TO_ADD=0
-    if (( configured_workers > 0 )); then
-        (( configured_workers == PLANNED_WORKER_COUNT )) || \
-            error "The configured worker target list has $configured_workers entries, but CLUSTER_NODE_COUNT requires $PLANNED_WORKER_COUNT workers."
-        WORKERS_TO_ADD="$configured_workers"
-    fi
-
-    if [[ -z "$CONTROL_PLANE_SCHEDULABLE" ]]; then
-        [[ "$CLUSTER_NODE_COUNT" -eq 1 ]] && control_plane_default=Y || control_plane_default=N
-        if ask_with_default \
-            "Allow the control plane to run workloads as a controller-worker?" \
-            "$control_plane_default"; then
-            CONTROL_PLANE_SCHEDULABLE=true
-        else
-            CONTROL_PLANE_SCHEDULABLE=false
-        fi
-    else
-        case "${CONTROL_PLANE_SCHEDULABLE,,}" in
-            1|true|yes|y|worker|controller-worker) CONTROL_PLANE_SCHEDULABLE=true ;;
-            0|false|no|n|controller|controller-only) CONTROL_PLANE_SCHEDULABLE=false ;;
-            *) error "CONTROL_PLANE_SCHEDULABLE must be true or false." ;;
-        esac
-    fi
-    if [[ "$CLUSTER_NODE_COUNT" -eq 1 && "$CONTROL_PLANE_SCHEDULABLE" != "true" ]]; then
-        error "A control-plane-only cluster must allow workloads on its control plane."
-    fi
-
-    export CLUSTER_NODE_COUNT CONTROL_PLANE_SCHEDULABLE
-    info "Topology plan: $CLUSTER_NODE_COUNT total node(s), $PLANNED_WORKER_COUNT worker(s), control-plane schedulable=$CONTROL_PLANE_SCHEDULABLE."
 }
 
 github_repository_url() {
@@ -597,12 +517,12 @@ select_node_transport() {
     local requested_transport="$K3S_NODE_TRANSPORT" selected_transport=""
 
     if [[ "$AUTO_APPROVE" == "true" && -z "$requested_transport" ]]; then
-        if [[ -n "${K3S_WORKER_HOSTS:-}" ]]; then
+        if [[ -n "${K3S_WORKER_HOSTS:-}${K3S_CONTROL_PLANE_HOSTS:-}" ]]; then
             requested_transport=tailscale
-        elif [[ -n "${K3S_WORKER_IPS:-}" ]]; then
+        elif [[ -n "${K3S_WORKER_IPS:-}${K3S_CONTROL_PLANE_IPS:-}" ]]; then
             requested_transport=vrack
         else
-            error "Set K3S_NODE_TRANSPORT=vrack|tailscale when adding workers non-interactively."
+            error "Set K3S_NODE_TRANSPORT=vrack|tailscale when adding nodes non-interactively."
         fi
     fi
 
@@ -767,6 +687,9 @@ ensure_tls_secret() {
 
 # ---------- Combined pre-flight checks -----------------------------------------
 [[ $EUID -eq 0 ]] && error "Do not run as root. The script uses sudo when needed."
+if systemctl cat k3s-agent.service >/dev/null 2>&1; then
+    error "This host is a K3s worker. Run this installer on the bootstrap control-plane host."
+fi
 
 info "============================================="
 info " Control Plane Installer"
@@ -803,11 +726,19 @@ else
 fi
 
 installer_prompt_section "Cluster nodes and scheduling" \
-    "Set the total node count, then choose whether the control plane also runs workloads."
+    "Choose an odd control-plane count, total nodes, and scheduling for all control planes."
 configure_cluster_topology_plan
+if [[ "$AUTO_APPROVE" == true ]]; then
+    if (( CONTROL_PLANES_TO_ADD > 0 )) && [[ -z "${K3S_CONTROL_PLANE_HOSTS:-}${K3S_CONTROL_PLANE_IPS:-}" ]]; then
+        error "Provide K3S_CONTROL_PLANE_HOSTS or K3S_CONTROL_PLANE_IPS for non-interactive server enrollment."
+    fi
+    if (( WORKERS_TO_ADD > 0 )) && [[ -z "${K3S_WORKER_HOSTS:-}${K3S_WORKER_IPS:-}" ]]; then
+        error "Provide K3S_WORKER_HOSTS or K3S_WORKER_IPS for non-interactive worker enrollment."
+    fi
+fi
 
 installer_prompt_section "Host prerequisites and K3s nodes" \
-    "Choose host preparation, control-plane installation, and optional workers."
+    "Choose host preparation and K3s installation; additional servers and workers join over SSH."
 if command -v k3s &>/dev/null; then
     warn "K3s detected: $(k3s --version | head -1)"
     K3S_DEFAULT="N"
@@ -824,7 +755,14 @@ else
     ADD_K3S_WORKERS=false
     info "The requested worker count is already present; no worker enrollment is needed."
 fi
-if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
+ADD_K3S_CONTROL_PLANES=false
+if (( CONTROL_PLANES_TO_ADD > 0 )); then
+    ADD_K3S_CONTROL_PLANES=true
+    info "$CONTROL_PLANES_TO_ADD additional control-plane node(s) will be added or reconciled over SSH."
+fi
+ENROLL_K3S_NODES=false
+if [[ "$ADD_K3S_WORKERS" == "true" || "$ADD_K3S_CONTROL_PLANES" == "true" ]]; then
+    ENROLL_K3S_NODES=true
     K3S_NODE_TRANSPORT="$(select_node_transport)"
     export K3S_NODE_TRANSPORT
     if [[ "$K3S_NODE_TRANSPORT" == "tailscale" ]]; then
@@ -870,7 +808,7 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
         export OVH_VRACK_AUTOMATE_ACCOUNT OVH_VRACK_CONFIG_PREPARED
         if [[ -z "${K3S_PRIVATE_ADDRESS:-}" ]]; then
             if [[ "$AUTO_APPROVE" == "true" ]]; then
-                error "K3S_PRIVATE_ADDRESS is required with vRack workers."
+                error "K3S_PRIVATE_ADDRESS is required with vRack nodes."
             fi
             installer_prompt_value K3S_PRIVATE_ADDRESS "Control-plane vRack/private RFC1918 IPv4"
             [[ -n "$K3S_PRIVATE_ADDRESS" ]] || error "A control-plane vRack/private IPv4 address is required."
@@ -881,7 +819,7 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
         fi
         if [[ -z "${K3S_NODE_NETWORK_CIDR:-}" ]]; then
             if [[ "$AUTO_APPROVE" == "true" ]]; then
-                error "K3S_NODE_NETWORK_CIDR is required with vRack workers."
+                error "K3S_NODE_NETWORK_CIDR is required with vRack nodes."
             fi
             installer_prompt_value K3S_NODE_NETWORK_CIDR \
                 "Trusted vRack/private node CIDR (for example 10.50.0.0/24)"
@@ -972,7 +910,7 @@ if [[ "$CONFIGURE_CLOUDFLARE" == "true" && "$INSTALL_INGRESS" != "true" ]]; then
 fi
 
 RUN_K8S_FEATURES=false
-if [[ "$INSTALL_K3S" == "true" || "$ADD_K3S_WORKERS" == "true" || "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$CONFIGURE_CLOUDFLARE" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_DATA_STORES" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" || "$INSTALL_DESCHEDULER" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
+if [[ "$INSTALL_K3S" == "true" || "$ENROLL_K3S_NODES" == "true" || "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$CONFIGURE_CLOUDFLARE" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_DATA_STORES" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" || "$INSTALL_DESCHEDULER" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
     RUN_K8S_FEATURES=true
 fi
 
@@ -1023,7 +961,7 @@ else
 fi
 
 if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
-    if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
+    if [[ "$ENROLL_K3S_NODES" == "true" ]]; then
         [[ -x "$K3S_NETWORK_SCRIPT" ]] || error "K3s private-network configurator not found or not executable: $K3S_NETWORK_SCRIPT"
         network_args=()
         [[ -z "${K3S_PRIVATE_ADDRESS:-}" ]] || network_args+=(--private-ip "$K3S_PRIVATE_ADDRESS")
@@ -1034,6 +972,11 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         fi
         step "Configuring private K3s control-plane networking..."
         "$K3S_NETWORK_SCRIPT" "${network_args[@]}"
+    fi
+
+    if (( CONTROL_PLANE_COUNT > 1 )); then
+        step "Preparing the bootstrap server's embedded etcd datastore..."
+        "$K3S_HA_SCRIPT"
     fi
 
     if [[ "$INSTALL_K3S" == "true" ]]; then
@@ -1062,7 +1005,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         K3S_REGISTRY_HOST="$K3S_REGISTRY_HOST" K3S_REGISTRY_ENDPOINT="$K3S_REGISTRY_ENDPOINT" \
             "$K3S_REGISTRY_MIRROR_SCRIPT"
     fi
-    export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+    export KUBECONFIG="$HOME/.kube/config"
     grep -q "KUBECONFIG" ~/.bashrc 2>/dev/null || \
         echo 'export KUBECONFIG=~/.kube/config' >> ~/.bashrc
 fi
@@ -1103,10 +1046,12 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     kubectl cluster-info &>/dev/null || error "Cannot reach K8s cluster."
     [[ "$NEEDS_HELM" != "true" ]] || command -v helm &>/dev/null || error "helm not found."
 
-    mapfile -t control_plane_nodes < <(kubectl get nodes \
-        -l node-role.kubernetes.io/control-plane -o name)
-    [[ ${#control_plane_nodes[@]} -gt 0 ]] || error "No control-plane node was found."
-    kubectl label "${control_plane_nodes[@]}" \
+    # Only this bootstrap host owns public ingress. Joined servers retain their
+    # private exposure and disabled ServiceLB labels on subsequent runs.
+    kubectl get node "$CONTROL_PLANE_NODE_NAME" -o json | jq -e \
+        '.metadata.labels | has("node-role.kubernetes.io/control-plane") or has("node-role.kubernetes.io/master")' >/dev/null || \
+        error "CONTROL_PLANE_NODE_NAME must identify the bootstrap control-plane node."
+    kubectl label "node/$CONTROL_PLANE_NODE_NAME" \
         svccontroller.k3s.cattle.io/enablelb=true \
         node.bm-cluster.io/role=control-plane \
         "node.bm-cluster.io/exposure=$SERVER_EXPOSURE" \
@@ -1114,6 +1059,31 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     if [[ "$INSTALL_K3S" == "true" ]]; then
         kubectl wait --for=condition=Ready node --all --timeout=120s
+    fi
+
+    if [[ "$ADD_K3S_CONTROL_PLANES" == "true" ]]; then
+        [[ -x "$CONTROL_PLANE_ENROLLMENT_SCRIPT" ]] || error "Control-plane enrollment script is not executable."
+        control_plane_manager_args=(--defer-topology --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE"
+            --transport "$K3S_NODE_TRANSPORT" --server-url "https://${K3S_PRIVATE_ADDRESS}:6443")
+        if [[ -n "${K3S_CONTROL_PLANE_HOSTS:-}" ]]; then
+            control_plane_manager_args+=(--control-plane-hosts "$K3S_CONTROL_PLANE_HOSTS")
+        elif [[ -n "${K3S_CONTROL_PLANE_IPS:-}" ]]; then
+            control_plane_manager_args+=(--control-plane-ips "$K3S_CONTROL_PLANE_IPS")
+        else
+            control_plane_manager_args+=(--control-plane-count "$CONTROL_PLANES_TO_ADD")
+        fi
+        [[ -z "${K3S_CONTROL_PLANE_SSH_USER:-}" ]] || control_plane_manager_args+=(--ssh-user "$K3S_CONTROL_PLANE_SSH_USER")
+        [[ -z "${K3S_CONTROL_PLANE_SSH_PORT:-}" ]] || control_plane_manager_args+=(--ssh-port "$K3S_CONTROL_PLANE_SSH_PORT")
+        [[ -z "${K3S_CONTROL_PLANE_IDENTITY_FILE:-}" ]] || control_plane_manager_args+=(--identity-file "$K3S_CONTROL_PLANE_IDENTITY_FILE")
+        [[ -z "${K3S_NODE_NETWORK_CIDR:-}" ]] || control_plane_manager_args+=(--node-network-cidr "$K3S_NODE_NETWORK_CIDR")
+        [[ "$AUTO_APPROVE" != "true" ]] || control_plane_manager_args+=(--non-interactive)
+        step "Joining additional K3s control-plane servers..."
+        if [[ "$K3S_NODE_TRANSPORT" == "tailscale" ]]; then
+            TAILSCALE_API_TOKEN="$TAILSCALE_API_TOKEN" \
+                "$CONTROL_PLANE_ENROLLMENT_SCRIPT" "${control_plane_manager_args[@]}"
+        else
+            "$CONTROL_PLANE_ENROLLMENT_SCRIPT" "${control_plane_manager_args[@]}"
+        fi
     fi
 
     if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
@@ -1136,10 +1106,11 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         [[ -z "${K3S_NODE_NETWORK_CIDR:-}" ]] || worker_manager_args+=(--node-network-cidr "$K3S_NODE_NETWORK_CIDR")
         [[ -z "${K3S_WORKER_LABELS:-}" ]] || worker_manager_args+=(--labels "$K3S_WORKER_LABELS")
         [[ -z "${K3S_WORKER_TAINTS:-}" ]] || worker_manager_args+=(--taints "$K3S_WORKER_TAINTS")
+        [[ "$AUTO_APPROVE" != "true" ]] || worker_manager_args+=(--non-interactive)
         step "Adding K3s worker nodes..."
         if [[ "$K3S_NODE_TRANSPORT" == "tailscale" ]]; then
-            printf '%s\n' "$TAILSCALE_API_TOKEN" | \
-                "$WORKER_INSTALLER_SCRIPT" --control-plane --tailscale-api-token-stdin "${worker_manager_args[@]}"
+            TAILSCALE_API_TOKEN="$TAILSCALE_API_TOKEN" \
+                "$WORKER_INSTALLER_SCRIPT" --control-plane "${worker_manager_args[@]}"
         else
             "$WORKER_INSTALLER_SCRIPT" --control-plane "${worker_manager_args[@]}"
         fi
@@ -1152,6 +1123,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     step "Reconciling control-plane scheduling and topology-dependent configuration..."
     "$CLUSTER_TOPOLOGY_SCRIPT" \
         --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE" \
+        --expected-control-plane-count "$CONTROL_PLANE_COUNT" \
         --expected-node-count "$CLUSTER_NODE_COUNT"
     [[ -x "$LEGACY_RECONCILIATION_SCRIPT" ]] || error "Legacy-state reconciler is not executable: $LEGACY_RECONCILIATION_SCRIPT"
     "$LEGACY_RECONCILIATION_SCRIPT"
@@ -1202,6 +1174,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             -n longhorn-system --timeout="$LONGHORN_POD_WAIT_TIMEOUT"
         "$CLUSTER_TOPOLOGY_SCRIPT" \
             --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE" \
+            --expected-control-plane-count "$CONTROL_PLANE_COUNT" \
             --expected-node-count "$CLUSTER_NODE_COUNT"
         if [[ "$CONFIGURE_OFFSITE_BACKUPS" == "true" ]]; then
             step "Configuring recurring off-node Longhorn volume backups..."
@@ -1219,6 +1192,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --set controller.service.type=LoadBalancer \
             --set controller.service.enableHttp=true \
             --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true' \
+            --set-string 'controller.nodeSelector.svccontroller\.k3s\.cattle\.io/enablelb=true' \
             --set-string 'controller.tolerations[0].key=node-role.kubernetes.io/control-plane' \
             --set-string 'controller.tolerations[0].operator=Exists' \
             --set-string 'controller.tolerations[0].effect=NoSchedule' \
@@ -1417,6 +1391,7 @@ info "============================================="
 echo ""
 echo "Cluster topology:"
 echo "  Total nodes: $CLUSTER_NODE_COUNT"
+echo "  Control-plane nodes: $CONTROL_PLANE_COUNT"
 echo "  Worker nodes: $PLANNED_WORKER_COUNT"
 if [[ "$CONTROL_PLANE_SCHEDULABLE" == "true" ]]; then
     echo "  Control plane: controller-worker"

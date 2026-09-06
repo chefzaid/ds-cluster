@@ -1,7 +1,8 @@
 # Bare-Metal Cluster
 
 Single- or multi-node K3s infrastructure for development and self-hosted platform
-services. The repository installs the control plane and workers, storage, ingress,
+services, with one control plane or an odd number of control planes for embedded
+etcd quorum. The repository installs control planes and workers, storage, ingress,
 security tools, secrets management, data stores, observability, CI/CD tools, and
 Odoo.
 
@@ -19,10 +20,22 @@ Odoo.
 
 ## Architecture
 
-Public HTTPS traffic enters only through the control-plane NGINX LoadBalancer and is routed by
+Public HTTPS traffic enters through the first control plane's NGINX LoadBalancer and is routed by
 hostname to ClusterIP services. Cloudflare provides public DNS and edge TLS;
 NGINX uses a wildcard Cloudflare Origin CA certificate for strict end-to-end
 TLS.
+
+The installer supports one control plane for standalone operation, or 3, 5, ...
+control planes with embedded etcd, plus any number of workers. A majority of
+etcd servers must remain available: three control planes tolerate one server
+failure, and five tolerate two. Additional control planes join the same
+datastore over the private node network. See the
+[K3s embedded-etcd HA guide](https://docs.k3s.io/datastore/ha-embedded).
+Additional control planes use local exposure and do not advertise public
+ServiceLB endpoints. Public DNS still targets the first host; the installer
+does not provision a floating API address, ingress failover, or application
+replication. Control-plane quorum therefore does not guarantee public service
+availability after losing that host.
 
 Vault is the source of infrastructure credentials. External Secrets syncs those
 values into namespace-scoped Kubernetes Secrets. Longhorn provides persistent
@@ -209,9 +222,9 @@ Requirements:
 - 8 or more CPUs, 32 GB or more RAM, and 250 GB or more disk
 - A sudo-capable non-root user
 - A domain registered for public deployments
-- SSH keys and passwordless `sudo` from the control plane to every worker
+- SSH keys and passwordless `sudo` from the first control plane to every other node
 
-For a new cluster, run the guided installer on the future control-plane host:
+For a new cluster, run the guided installer on the first control-plane host:
 
 ```bash
 ./install-control-plane.sh
@@ -234,17 +247,21 @@ platform components, recovery and public access, GitOps delivery, and
 administrator credentials. The recommended platform bundle replaces seven
 repetitive component questions; decline it only when you want to select those
 components individually.
-The installer asks for the total cluster node count, including the control
-plane, and then whether that control plane is a schedulable controller-worker
-or a tainted controller-only node. A one-node cluster must use controller-worker
-mode. Worker enrollment derives its count from the total, so the same number is
-not requested twice.
+The installer asks how many control planes to install (a positive odd number),
+the total cluster node count including all control planes, and whether all
+control planes may run workloads. For three control planes and four workers,
+enter `3` control planes and `7` total nodes; the worker count is derived.
+The single scheduling choice applies to every control plane: controller-worker
+mode permits workloads, and controller-only mode adds
+`node-role.kubernetes.io/control-plane:NoSchedule`. Clusters without workers,
+including a three-control-plane cluster with no workers, must allow workloads
+on the control planes. Controller-only mode is applied after workers are Ready.
 When platform services are selected, it asks for a platform administrator
 login and a confirmed hidden password. That identity is provisioned through
 Keycloak as administrator for every integrated service and application. The
 password must contain at least 12 characters with lowercase, uppercase,
 numeric, and special characters.
-It then asks which infrastructure features to install and, when workers are
+It then asks which infrastructure features to install and, when other nodes are
 selected, starts the vRack or Tailscale prerequisite wizard before any UFW
 change. Each wizard shows the exact account page, pauses while you complete the
 manual account step, collects secrets with hidden input, checks the account
@@ -260,25 +277,61 @@ non-interactive run. Non-interactive platform installation also requires
 `KEYCLOAK_SSO_BOOTSTRAP_USERNAME`, and `KEYCLOAK_SSO_BOOTSTRAP_PASSWORD`.
 Override `CLOUDFLARE_NODE_DNS_LABEL` only when the public node hostname should
 differ from `node-01`.
-Set `CLUSTER_NODE_COUNT` and `CONTROL_PLANE_SCHEDULABLE=true|false` to override
-the node-list-derived non-interactive topology defaults.
+Set `CONTROL_PLANE_COUNT`, `CLUSTER_NODE_COUNT`, and
+`CONTROL_PLANE_SCHEDULABLE=true|false` to override the node-list-derived
+non-interactive topology defaults. For Tailscale, `K3S_CONTROL_PLANE_HOSTS`
+contains the comma-separated bootstrap SSH targets for additional control
+planes, excluding the host running the installer; private IPs are discovered
+during enrollment. For vRack, use `K3S_CONTROL_PLANE_IPS` instead, containing
+the additional hosts' preconfigured private IPv4 addresses.
+`K3S_WORKER_HOSTS` and `K3S_WORKER_IPS` describe workers in the same way.
+For example, with the other required identity and transport inputs supplied:
+
+```bash
+CONTROL_PLANE_COUNT=3 CLUSTER_NODE_COUNT=5 CONTROL_PLANE_SCHEDULABLE=false \
+K3S_NODE_TRANSPORT=tailscale \
+K3S_CONTROL_PLANE_HOSTS='admin@cp-02,admin@cp-03' \
+K3S_WORKER_HOSTS='admin@worker-01,admin@worker-02' \
+  ./install-control-plane.sh --yes
+```
+
+When expanding an existing cluster with a partial list of new hosts, set both
+counts explicitly to the desired final totals. Registered nodes count toward
+those totals even when NotReady; the final reconciliation requires the expected
+number of control planes and workers to be present and Ready.
 Selected identity and transport secrets are supplied as environment variables.
 
-## Adding worker nodes
+## Adding control planes and worker nodes
 
-Worker enrollment is built into `install-control-plane.sh`. Answer **yes** to
-adding workers, choose **OVHcloud-only vRack** or **Tailscale for
-hybrid/non-OVHcloud providers**, then enter any number of workers. Use one
-transport consistently for the control plane and all workers in an enrollment
-run. Adding workers increases workload capacity; it does not make the single
-K3s control plane highly available.
+Node enrollment is built into `install-control-plane.sh`. Choose the desired
+control-plane and total node counts, select **OVHcloud-only vRack** or
+**Tailscale for hybrid/non-OVHcloud providers**, and supply the other hosts.
+Use one transport consistently for every node in an enrollment run. The first
+control plane initializes embedded etcd for a multi-control-plane deployment;
+additional control planes join as K3s servers, and workers join as K3s agents.
+Rerun the main installer on the original control plane to expand to the next
+odd control-plane count. Existing SQLite clusters are converted to embedded
+etcd before the new servers join; existing etcd clusters retain their datastore.
+Before conversion, the installer writes an integrity-checked SQLite backup and
+server configuration/token archive under
+`/var/backups/bm-cluster/k3s/pre-etcd-<timestamp>` with access restricted to root.
+Adding workers increases workload capacity independently of control-plane quorum.
 
-After every worker enrollment, `scripts/reconcile-cluster-topology.sh` updates
-the stored topology and
+For an existing embedded-etcd cluster, the lower-level
+`scripts/add-k3s-control-planes.sh` assistant accepts `--control-plane-count`
+as the number of additional targets, with `--control-plane-hosts` for Tailscale
+or `--control-plane-ips` for vRack. It uses the shared SSH and transport options
+shown by `--help`, and checks the final control-plane count is odd. The main
+installer remains the entry point for converting a SQLite cluster and choosing
+the complete desired topology.
+
+After enrollment, `scripts/reconcile-cluster-topology.sh` updates the stored
+total, control-plane, and worker counts, including each role's Ready count, and
 reconciles Longhorn's live setting, Helm values, default StorageClass, and
 existing volumes. Once workers exist, Longhorn stops scheduling storage on the
-control plane and safely evicts its old replicas to worker storage in the
-background.
+control planes and safely evicts their old replicas to Ready worker storage in
+the background. Registered workers keep control-plane storage excluded during
+worker outages; eviction is requested only while at least one worker is Ready.
 Standalone `./install-worker.sh --control-plane` enrollment asks whether to
 convert the control plane to controller-only after the new worker is Ready; the
 default answer is yes. It skips that question when every control-plane node
@@ -287,17 +340,19 @@ enrollment from a schedulable control plane requires an explicit
 `--control-plane-schedulable true|false|preserve` safeguard. Enrollment launched
 by the main installer does not repeat the question because it passes through
 the explicit scheduling choice made earlier.
-Longhorn uses one replica with only the control plane or one worker; with two or
-more workers its replica count equals the Ready worker count. The control plane
-is excluded from Longhorn storage scheduling whenever a worker exists:
+Longhorn uses one replica with only control planes or one Ready worker; with two
+or more Ready workers its replica count equals the Ready worker count. Every
+control plane is excluded from Longhorn storage scheduling whenever a worker
+exists. Three control planes alone therefore provide etcd redundancy with one
+Longhorn replica per volume:
 
 | Topology | Longhorn replicas |
 |---|---:|
-| Control plane only | 1 |
-| Control plane + 1 worker | 1 |
-| Control plane + 2 workers | 2 |
-| Control plane + 3 workers | 3 |
-| Control plane + N workers | N |
+| 1, 3, 5, ... control planes, no workers | 1 |
+| 3 control planes + 1 Ready worker | 1 |
+| 3 control planes + 2 Ready workers | 2 |
+| 3 control planes + 3 Ready workers | 3 |
+| Any supported control-plane count + N Ready workers | max(N, 1) |
 
 Worker requirements:
 
@@ -375,7 +430,8 @@ replies remain allowed.
 
 | Node | Exposure | Enforced host controls |
 |---|---|---|
-| Control plane | Local or internet-facing | UFW and Lynis; internet mode also enables Fail2ban, CrowdSec, and SSH hardening while retaining password authentication |
+| First control plane | Local or internet-facing | UFW and Lynis; internet mode also enables Fail2ban, CrowdSec, and SSH hardening while retaining password authentication |
+| Additional control plane | Local/private | UFW and Lynis, private SSH from the first control plane, private K3s API and etcd peer ports, public ServiceLB advertisement disabled |
 | Worker | Private only | UFW default-deny inbound, RFC1918 or Tailscale node IP, SSH only from the exact control-plane IP, and K3s peer ports only from the trusted node CIDR/interface |
 
 The internet-facing control-plane policy keeps password SSH available as
@@ -603,14 +659,22 @@ kubectl get jobs -n infra -l app=descheduler -w
 ```
 
 K3s creates a consistent root-only recovery archive every day and retains the
-latest seven under `/var/backups/bm-cluster/k3s`. It contains compacted current
-Kubernetes state, server/encryption credentials, a Vault Raft snapshot, and
+latest seven under `/var/backups/bm-cluster/k3s`. It contains a compacted SQLite
+backup or a native embedded-etcd snapshot, server/encryption credentials,
+K3s configuration including managed drop-ins, a Vault Raft snapshot, and
 logical PostgreSQL and MongoDB dumps when those services exist. When the guided
 S3-compatible destination is enabled, restic encrypts and uploads each archive
 and retains daily, weekly, and monthly recovery points. Longhorn simultaneously
 backs up every labeled PVC to the same private bucket through a daily recurring
 job; the host backup labels newly created volumes before that job runs. Run an
 archive immediately with `sudo systemctl start bm-k3s-backup.service`.
+
+Each archive includes datastore-specific `RESTORE.txt` instructions. SQLite
+recovery restores its database with K3s stopped. Embedded-etcd recovery stops
+all servers, restores the snapshot and original server token on the first
+server, then rejoins the remaining servers after preserving their old database
+directories. Follow the [K3s snapshot restore procedure](https://docs.k3s.io/cli/etcd-snapshot#restoring-snapshots)
+and the archive's instructions for the selected datastore.
 
 The object-storage assistant explains how to create a bucket-scoped access
 key/API token, then prompts with hidden input for the access key, secret, and
@@ -623,8 +687,8 @@ survive disk or host loss.
 
 | Path | Use it for | Prerequisites | Behavior |
 |---|---|---|---|
-| `./install-control-plane.sh` and `./install-worker.sh` | First installation, guided transport preparation, K3s installation, and worker onboarding | Supported Ubuntu/Debian host, non-root sudo user; workers also need SSH keys and passwordless sudo; vRack needs tested KVM/rescue access | Interactive and resumable; pauses for account work, verifies it, configures private networking before UFW, then installs K3s/platform resources |
-| `ansible/deploy.yml` | Repeatable platform reconciliation on an existing control plane, including CI | Working K3s cluster and kubeconfig, `ansible-playbook`, `kubectl`, Helm, repository checkout, and sudo; transport account prerequisites must already be complete | Non-interactive; uses `config/platform.env` and the same transport/security scripts, but does not install the K3s control plane or enroll worker operating systems |
+| `./install-control-plane.sh` and `./install-worker.sh` | First installation, guided transport preparation, K3s installation, control-plane expansion, and worker onboarding | Supported Ubuntu/Debian host, non-root sudo user; remote nodes also need SSH keys and passwordless sudo; vRack needs tested KVM/rescue access | Interactive and resumable; pauses for account work, verifies it, configures private networking before UFW, then installs K3s/platform resources |
+| `ansible/deploy.yml` | Repeatable platform reconciliation on an existing control plane, including CI | Working K3s cluster and kubeconfig, `ansible-playbook`, `kubectl`, Helm, repository checkout, and sudo; transport account prerequisites must already be complete | Non-interactive; uses `config/platform.env` and the same transport/security scripts, but does not install K3s or enroll additional hosts |
 
 Run Ansible from the control-plane repository checkout with its local inventory:
 
@@ -652,9 +716,11 @@ all feature groups by default except Cloudflare. Feature switches are
 automatically: `install_apps=false` disables Odoo, platform services and Odoo
 require data stores, data stores require Vault and External Secrets, and
 Cloudflare requires ingress.
-Ansible preserves the installer-selected control-plane mode by default and
+Ansible preserves the installer-selected scheduling mode across all control planes by default and
 uses the same Ready-worker Longhorn replica rule. Set
 `CONTROL_PLANE_SCHEDULABLE=true|false` only when intentionally changing it.
+Additional control planes retain their private exposure and disabled public
+ServiceLB labels during reconciliation.
 
 Local infrastructure password alignment is also explicit in Ansible. To run
 the same post-deployment reconciliation as the installer without exposing the
@@ -735,7 +801,7 @@ For off-node recovery, additionally export
 prompts for missing secret inputs.
 
 The playbook deploys platform resources through the active kubeconfig; K3s
-control-plane installation and worker operating-system provisioning remain the
+control-plane installation and remote host provisioning remain the
 responsibility of the installers above.
 
 Release defaults and ordered service inventories live only in
@@ -746,6 +812,11 @@ Ansible, YAML, immutable image references, and hostname inventories:
 ./scripts/validate-repository.sh
 ./scripts/validate-repository.sh --live # server-side dry-run; no mutation
 ```
+
+The local behavioral checks require Bash, jq, SQLite's `sqlite3` CLI, and
+`flock`; CI installs these automatically. They exercise topology planning,
+server/worker enrollment, private networking, datastore conversion, and recovery
+archives with mocked cluster and host commands.
 
 The same checks run in GitLab for every merge request and branch push; default
 branch pipelines also verify Argo CD reconciliation, GitLab Registry health,
@@ -760,9 +831,11 @@ EditorConfig and Git attributes keep text formatting portable.
 | `config/apparmor/` | Host AppArmor policy installed on K3s nodes |
 | `config/multipath/` | Host multipath configuration required by Longhorn |
 | `config/systemd/` | Host services and timers installed by platform scripts |
-| `install-control-plane.sh` | Install or reconcile the K3s control plane and platform services |
+| `install-control-plane.sh` | Install or reconcile an odd number of K3s control planes, enroll workers, and deploy platform services |
 | `install-worker.sh` | Unified worker assistant for control-plane SSH enrollment or local self-join |
 | `scripts/add-k3s-workers.sh` | Internal multi-worker SSH enrollment implementation |
+| `scripts/add-k3s-control-planes.sh` | Additional K3s server enrollment using the shared private transport and SSH workflow |
+| `scripts/install-k3s-server.sh` | Internal local K3s server join with the existing cluster's token and exact version |
 | `scripts/install-k3s-worker.sh` | Internal local worker installation implementation |
 | `scripts/audit-cluster-nodes.sh` | Control-plane Lynis runner for local and transient remote audits |
 | `scripts/configure-lynis-schedule.sh` | Monthly control-plane Lynis timer and twelve-month local report retention |
@@ -773,13 +846,16 @@ EditorConfig and Git attributes keep text formatting portable.
 | `scripts/configure-k3s-backups.sh` | Local archive timer, encrypted S3/restic destination, and Longhorn recurring-backup reconciliation |
 | `scripts/configure-k3s-apparmor.sh` | Enforced runtime-default profile with Ubuntu stacking compatibility |
 | `scripts/configure-k3s-control-plane-network.sh` | Persist private cluster and public ingress addresses for the K3s control plane |
+| `scripts/configure-k3s-ha.sh` | Initialize embedded etcd, backing up SQLite and server credentials before conversion |
 | `scripts/configure-k3s-registry-mirror.sh` | Reconcile the node runtime mirror for GitLab Container Registry |
 | `scripts/configure-gitlab-ci.sh` | GitLab group, project, Dependency Proxy, instance runner, and Vault token reconciliation |
 | `scripts/configure-repository-sync.sh` | Optional project-discovered GitHub/GitLab mirroring, webhook, variables, secrets, and first sync |
 | `scripts/render-cluster-config.sh` | Render installer-selected domains and GitOps source from neutral templates |
 | `scripts/configure-node-security.sh` | Host firewall, intrusion prevention, and Lynis schedule setup |
 | `scripts/reconcile-cluster-topology.sh` | Reconcile control-plane taints, stored node topology, and worker-derived Longhorn replication |
+| `scripts/test-cluster-topology.sh` | Mocked CLI regression checks for quorum inputs, role counts, readiness, scheduling, and storage policy |
 | `scripts/lib/installer-prompts.sh` | Shared section, value, secret, confirmation, yes/no, and node-transport prompt primitives |
+| `scripts/lib/cluster-plan.sh` | Validate desired control-plane/worker counts against registered nodes and derive enrollment targets |
 | `scripts/lib/network.sh` | Shared RFC1918, Tailscale, CIDR, and interface validation |
 | `scripts/lib/transport-guide.sh` | Shared guided vRack/Tailscale account prerequisites and verification |
 | `scripts/lib/gitlab-admin-token.sh` | Short-lived local GitLab administrator token creation and revocation |

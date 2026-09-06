@@ -13,6 +13,7 @@ source "$NETWORK_LIBRARY"
 PRIVATE_IP="${K3S_PRIVATE_ADDRESS:-}"
 PRIVATE_INTERFACE="${K3S_PRIVATE_INTERFACE:-}"
 PUBLIC_IP="${K3S_PUBLIC_ADDRESS:-}"
+PRIVATE_ONLY=false
 RESTART=false
 CONFIG_PATH="/etc/rancher/k3s/config.yaml.d/20-bm-private-node-network.yaml"
 
@@ -31,12 +32,13 @@ Options:
   --private-ip IP          RFC1918 or Tailscale IPv4 used by cluster nodes
   --private-interface DEV  Interface that owns the private IP
   --public-ip IP           Public IPv4 advertised as the node ExternalIP
+  --private-only           Do not advertise a public ExternalIP (additional servers)
   --restart                Restart K3s after writing the drop-in
   -h, --help               Show this help
 
 Values are automatically detected when omitted. A provider/LAN RFC1918 address
 is preferred; Tailscale is used only as a fallback when it is already installed
-and connected. The managed K3s drop-in sets node-ip, node-external-ip (when
+and connected. The managed K3s drop-in sets node-ip, advertise-address, node-external-ip (when
 public), tls-san, and flannel-iface.
 EOF
 }
@@ -49,6 +51,7 @@ while [[ $# -gt 0 ]]; do
         --private-interface=*) PRIVATE_INTERFACE="${1#*=}" ;;
         --public-ip) shift; [[ $# -gt 0 ]] || error "Missing value for --public-ip"; PUBLIC_IP="$1" ;;
         --public-ip=*) PUBLIC_IP="${1#*=}" ;;
+        --private-only) PRIVATE_ONLY=true ;;
         --restart) RESTART=true ;;
         -h|--help) usage; exit 0 ;;
         *) error "Unknown option: $1" ;;
@@ -101,10 +104,18 @@ if [[ "$PRIVATE_INTERFACE" == "tailscale0" ]]; then
     command -v tailscale >/dev/null 2>&1 || error "Tailscale is not installed"
     tailscale status >/dev/null 2>&1 || error "Tailscale is not connected"
 fi
-ip -4 -o address show dev "$PRIVATE_INTERFACE" | awk '{print $4}' | grep -Fq "$PRIVATE_IP/" || \
+ip -4 -o address show dev "$PRIVATE_INTERFACE" | awk -v ip="$PRIVATE_IP" \
+    '{split($4, address, "/")} address[1] == ip {found=1} END {exit !found}' || \
     error "$PRIVATE_IP is not assigned to interface $PRIVATE_INTERFACE"
 
-if [[ -z "$PUBLIC_IP" && -n "$default_source" ]] && ! trusted_private_ipv4 "$default_source"; then
+# Preserve this choice when later enrollment reconciles networking on a private
+# server; detecting its provider route must not reintroduce public advertisement.
+if sudo test -f "$CONFIG_PATH" && sudo grep -Fxq '# exposure: private-only' "$CONFIG_PATH"; then
+    PRIVATE_ONLY=true
+fi
+if [[ "$PRIVATE_ONLY" == "true" ]]; then
+    [[ -z "$PUBLIC_IP" ]] || error "Private-only control planes cannot use --public-ip or K3S_PUBLIC_ADDRESS."
+elif [[ -z "$PUBLIC_IP" && -n "$default_source" ]] && ! trusted_private_ipv4 "$default_source"; then
     PUBLIC_IP="$default_source"
 fi
 if [[ -n "$PUBLIC_IP" ]]; then
@@ -116,7 +127,10 @@ tmp_file="$(mktemp)"
 trap 'rm -f "$tmp_file"' EXIT
 {
     printf '# Managed by scripts/configure-k3s-control-plane-network.sh\n'
+    [[ "$PRIVATE_ONLY" != "true" ]] || printf '# exposure: private-only\n'
     printf 'node-ip: "%s"\n' "$PRIVATE_IP"
+    # K3s otherwise prefers node-external-ip when advertising the API to peers.
+    printf 'advertise-address: "%s"\n' "$PRIVATE_IP"
     [[ -z "$PUBLIC_IP" ]] || printf 'node-external-ip: "%s"\n' "$PUBLIC_IP"
     printf 'tls-san+:\n  - "%s"\n' "$PRIVATE_IP"
     printf 'flannel-iface: "%s"\n' "$PRIVATE_INTERFACE"

@@ -153,9 +153,7 @@ if [[ -x "$topology_script" ]]; then
     done
 fi
 if [[ "$topology_mapping" == "0:1,1:1,2:2,3:3,4:4" ]] &&
-   grep -Fq 'Total number of cluster nodes, including the control plane' \
-       "$REPOSITORY_ROOT/install-control-plane.sh" &&
-   grep -Fq 'Allow the control plane to run workloads as a controller-worker?' \
+   grep -Fq 'source "$SCRIPT_DIR/scripts/lib/cluster-plan.sh"' \
        "$REPOSITORY_ROOT/install-control-plane.sh" &&
    grep -Fq -- '--worker-count "$WORKERS_TO_ADD"' \
        "$REPOSITORY_ROOT/install-control-plane.sh" &&
@@ -174,6 +172,14 @@ else
     fail "install and worker enrollment share control-plane and Longhorn topology policy"
 fi
 
+for topology_test in test-cluster-plan.sh test-cluster-topology.sh test-ha-network.sh test-k3s-ha.sh test-k3s-backups.sh test-ha-enrollment.sh; do
+    if bash "$SCRIPT_DIR/$topology_test"; then
+        pass "$topology_test behavioral checks"
+    else
+        fail "$topology_test behavioral checks"
+    fi
+done
+
 if grep -Fq 'rotate_local_admin_passwords_enabled' "$REPOSITORY_ROOT/ansible/deploy.yml" &&
    grep -Fq 'scripts/rotate-local-admin-passwords.sh' "$REPOSITORY_ROOT/ansible/deploy.yml" &&
    grep -Fq -- '--password-stdin' "$REPOSITORY_ROOT/ansible/deploy.yml" &&
@@ -189,7 +195,7 @@ ufw_apply_line="$(grep -n '^configure_ufw$' "$REPOSITORY_ROOT/scripts/configure-
 tailscale_handoff_line="$(grep -n '^make_ufw_authoritative_for_tailscale$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
 tailscale_worker_setup_line="$(grep -n '^if \[\[ "$NODE_TRANSPORT" == "tailscale" \]\]; then$' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | head -n 1 | cut -d: -f1 || true)"
 vrack_worker_setup_line="$(grep -n 'Configuring OVHcloud vRack before any UFW changes' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | cut -d: -f1 || true)"
-worker_firewall_line="$(grep -n '"\$SECURITY_HARDENER" --apply' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | head -n 1 | cut -d: -f1 || true)"
+worker_firewall_line="$(grep -nF '"$SECURITY_HARDENER" "${security_args[@]}"' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | head -n 1 | cut -d: -f1 || true)"
 control_tailscale_setup_line="$(grep -n 'Reconciling the tailnet policy and control-plane role' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
 control_vrack_attach_line="$(grep -n 'Attaching the control-plane private interface to OVHcloud vRack' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
 control_vrack_setup_line="$(grep -n 'Configuring and validating the control-plane OVHcloud vRack interface before any firewall changes' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
@@ -348,7 +354,7 @@ if [[ -r "$REPOSITORY_ROOT/scripts/lib/transport-guide.sh" ]] &&
    grep -Fq 'transport_guide_vrack_account' "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
    grep -Fq 'transport_guide_tailscale_account' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" &&
    grep -Fq 'transport_guide_vrack_account' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" &&
-   grep -Fq '"$NETWORK_LIBRARY" "$TRANSPORT_GUIDE_LIBRARY"' "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
+   grep -Fq '"$NETWORK_LIBRARY" "$PROMPT_LIBRARY" "$TRANSPORT_GUIDE_LIBRARY"' "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
    grep -Fq -- '--verify-account' "$REPOSITORY_ROOT/scripts/configure-tailscale.sh" &&
    grep -Fq -- '--verify-account' "$REPOSITORY_ROOT/scripts/configure-ovh-vrack.sh"; then
     pass "installers share guided, read-only transport prerequisite verification"

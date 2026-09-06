@@ -29,7 +29,7 @@ command -v jq >/dev/null || { echo "jq is required." >&2; exit 1; }
 [[ "$CONFIGURE_OFFSITE_BACKUPS" =~ ^(true|false)$ ]] || { echo "CONFIGURE_OFFSITE_BACKUPS must be true or false." >&2; exit 1; }
 [[ "$RUN_BACKUP_NOW" =~ ^(true|false)$ ]] || { echo "RUN_BACKUP_NOW must be true or false." >&2; exit 1; }
 
-if ! command -v sqlite3 >/dev/null; then
+if ! sudo test -d "${K3S_DATA_DIR:-/var/lib/rancher/k3s}/server/db/etcd" && ! command -v sqlite3 >/dev/null; then
   sudo apt-get update -qq
   sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sqlite3 >/dev/null
 fi

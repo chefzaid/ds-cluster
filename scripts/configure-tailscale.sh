@@ -279,6 +279,7 @@ reconcile_policy() {
         --argjson fresh "$fresh_default" '
         def managed_grant:
             ((.src // []) == ["autogroup:admin"] and (.dst // []) == [$cp, $worker]) or
+            ((.src // []) == [$cp] and (.dst // []) == [$cp]) or
             ((.src // []) == [$cp] and (.dst // []) == [$worker]) or
             ((.src // []) == [$worker] and (.dst // []) == [$cp]) or
             ((.src // []) == [$worker] and (.dst // []) == [$worker]);
@@ -287,6 +288,7 @@ reconcile_policy() {
         .tagOwners[$worker] = [] |
         .grants = ([((.grants // [])[]) | select(managed_grant | not)] + [
             {src:["autogroup:admin"], dst:[$cp,$worker], ip:["*"]},
+            {src:[$cp], dst:[$cp], ip:($peer + ["tcp:22","tcp:6443","tcp:2379-2380"] | unique)},
             {src:[$cp], dst:[$worker], ip:($peer + ["tcp:22"] | unique)},
             {src:[$worker], dst:[$cp], ip:($peer + ["tcp:6443"] | unique)},
             {src:[$worker], dst:[$worker], ip:$peer}

@@ -14,6 +14,8 @@ NODE_TAINTS=""
 NODE_NETWORK_CIDR=""
 CONTROL_PLANE_IP=""
 K3S_VERSION=""
+ENROLLMENT_ROLE="${K3S_ENROLLMENT_ROLE:-worker}"
+CONTROL_PLANE_SCHEDULABLE="${CONTROL_PLANE_SCHEDULABLE:-}"
 HARDENING_SSH_PORT=""
 NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
 TAILSCALE_READY=false
@@ -57,7 +59,9 @@ fi
 source "$TRANSPORT_GUIDE_LIBRARY"
 
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
+LONGHORN_HOST_CONFIGURATOR="$SCRIPT_DIR/configure-longhorn-host.sh"
 K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/configure-k3s-registry-mirror.sh"
+K3S_NETWORK_CONFIGURATOR="$SCRIPT_DIR/configure-k3s-control-plane-network.sh"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 TAILSCALE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
 OVH_VRACK_CONFIGURATOR="$SCRIPT_DIR/configure-ovh-vrack.sh"
@@ -80,7 +84,7 @@ error() { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 cleanup_private_credentials() {
     JOIN_TOKEN=""
     TAILSCALE_API_TOKEN=""
-    unset JOIN_TOKEN K3S_JOIN_TOKEN TAILSCALE_API_TOKEN 2>/dev/null || true
+    unset JOIN_TOKEN K3S_JOIN_TOKEN K3S_TOKEN TAILSCALE_API_TOKEN 2>/dev/null || true
     if [[ -n "$INSTALLER_TEMP_DIR" && "$INSTALLER_TEMP_DIR" == /tmp/bm-cluster-worker-installers.* && -d "$INSTALLER_TEMP_DIR" ]]; then
         rm -r -- "$INSTALLER_TEMP_DIR"
     fi
@@ -88,6 +92,53 @@ cleanup_private_credentials() {
 trap cleanup_private_credentials EXIT HUP INT TERM
 
 usage() {
+    if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+        cat <<'EOF'
+Join this host to an existing embedded-etcd K3s cluster as a control plane.
+
+Prefer ./scripts/add-k3s-control-planes.sh on the bootstrap control plane.
+For direct use, provide the server token through stdin and the exact cluster
+version, and run through private SSH from the bootstrap control plane:
+  ./scripts/install-k3s-server.sh --token-stdin --non-interactive \
+    --server-url https://10.0.0.10:6443 --node-ip 10.0.0.11 \
+    --node-name cp-02 --domain example.com --transport vrack \
+    --node-network-cidr 10.0.0.0/24 --k3s-version vX.Y.Z+k3s1 \
+    --control-plane-schedulable false
+
+Required server token: sudo cat /var/lib/rancher/k3s/server/token
+  --control-plane-schedulable true|false  Whether this control plane accepts workloads
+
+  --server-url URL           Private IPv4 API endpoint of the bootstrap server
+  --token-stdin              Read the existing server token from stdin
+  --node-name NAME           Unique Kubernetes node name
+  --node-ip IP               This server's private IPv4
+  --domain DOMAIN            Cluster domain for the container Registry
+  --k3s-version VERSION      Exact K3s server version (required)
+  --node-network-cidr CIDR   RFC1918 subnet or Tailscale 100.64.0.0/10
+  --control-plane-ip IP      Bootstrap private SSH source (default: server URL IP)
+  --transport MODE           vrack or tailscale
+  --vrack-interface NAME     Physical private NIC if not configured
+  --vrack-interface-mac MAC  Expected private NIC MAC
+  --vrack-vlan-id ID         Optional vRack VLAN ID
+  --tailscale-ready          Tailscale was already provisioned by the bootstrap
+  --tailscale-api-token-stdin
+                             Read Tailscale API credentials from stdin before joining
+  --tailscale-tailnet NAME   Tailnet name
+  --tailscale-mesh NAME      Cluster mesh name
+  --tailscale-hostname NAME  This server's Tailscale hostname
+  --tailscale-key-expiry N   One-use Tailscale auth-key validity in seconds
+  --labels CSV               Additional node labels
+  --taints CSV               Additional taints (use scheduling mode for NoSchedule)
+  --ssh-port PORT            Private SSH port
+  --non-interactive          Fail instead of prompting
+  -h, --help                 Show this help
+
+This installs a private server with embedded etcd, Traefik disabled, and secrets
+encryption enabled. It does not initialize a new cluster or install platform
+services. Existing K3s services require the enrollment manager's identity checks.
+EOF
+        return
+    fi
     cat <<'EOF'
 Install this machine as a K3s worker (agent).
 
@@ -166,6 +217,10 @@ while [[ $# -gt 0 ]]; do
         --control-plane-ip=*) CONTROL_PLANE_IP="${1#*=}" ;;
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
+        --node-role)        shift; [[ $# -gt 0 ]] || error "Missing node role"; ENROLLMENT_ROLE="$1" ;;
+        --node-role=*)      ENROLLMENT_ROLE="${1#*=}" ;;
+        --control-plane-schedulable) shift; [[ $# -gt 0 ]] || error "Missing scheduling mode"; CONTROL_PLANE_SCHEDULABLE="$1" ;;
+        --control-plane-schedulable=*) CONTROL_PLANE_SCHEDULABLE="${1#*=}" ;;
         --transport)        shift; [[ $# -gt 0 ]] || error "Missing value for --transport"; NODE_TRANSPORT="$1" ;;
         --transport=*)      NODE_TRANSPORT="${1#*=}" ;;
         --vrack-interface) shift; [[ $# -gt 0 ]] || error "Missing value for --vrack-interface"; VRACK_INTERFACE="$1" ;;
@@ -197,6 +252,12 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+[[ "$ENROLLMENT_ROLE" =~ ^(worker|control-plane)$ ]] || error "Invalid enrollment role: $ENROLLMENT_ROLE"
+if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+    [[ "$CONTROL_PLANE_SCHEDULABLE" =~ ^(true|false)$ ]] || \
+        error "Server joins require --control-plane-schedulable true|false."
+    [[ -n "$K3S_VERSION" ]] || error "Server joins require the bootstrap server's exact --k3s-version."
+fi
 if [[ -z "$REGISTRY_HOST" && -n "$PLATFORM_DOMAIN" ]]; then
     REGISTRY_HOST="registry.${PLATFORM_DOMAIN,,}"
 fi
@@ -248,8 +309,8 @@ select_transport() {
 }
 
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
-    installer_prompt_section "Private worker transport" \
-        "Use the same transport as the control plane and every existing worker."
+    installer_prompt_section "Private $ENROLLMENT_ROLE transport" \
+        "Use the same transport as every existing cluster node."
 fi
 select_transport
 if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
@@ -263,7 +324,7 @@ if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
         transport_guide_tailscale_account "$NON_INTERACTIVE" "$TAILSCALE_CONFIGURATOR" || \
             error "Tailscale prerequisites are incomplete or account verification failed."
         tailscale_args=(
-            --role worker
+            --role "$ENROLLMENT_ROLE"
             --tailnet "$TAILSCALE_TAILNET"
             --mesh-name "$TAILSCALE_MESH_NAME"
             --hostname "$TAILSCALE_NODE_HOSTNAME"
@@ -284,11 +345,15 @@ if [[ "$NODE_TRANSPORT" == "vrack" && "$NON_INTERACTIVE" != "true" ]]; then
         error "OVHcloud vRack prerequisites are incomplete."
 fi
 
-info "K3s worker enrollment"
-printf '%s\n' \
-    "On the control-plane node, obtain a token with one of:" \
-    "  sudo cat /var/lib/rancher/k3s/server/node-token" \
-    "  sudo k3s token create --ttl 1h --description worker-join"
+info "K3s $ENROLLMENT_ROLE enrollment"
+if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+    printf 'Obtain the server token on the bootstrap control plane:\n  sudo cat /var/lib/rancher/k3s/server/token\n'
+else
+    printf '%s\n' \
+        "On the control-plane node, obtain a token with one of:" \
+        "  sudo cat /var/lib/rancher/k3s/server/node-token" \
+        "  sudo k3s token create --ttl 1h --description worker-join"
+fi
 
 if [[ "$TOKEN_STDIN" == "true" ]]; then
     IFS= read -r JOIN_TOKEN || error "Could not read the join token from stdin."
@@ -398,7 +463,10 @@ else
 fi
 
 if "${SUDO[@]}" systemctl cat k3s.service >/dev/null 2>&1; then
-    error "This machine has a K3s server service. Refusing to replace it with a worker."
+    error "This machine already has a K3s server service. Use the control-plane enrollment manager to validate and reuse an existing server."
+fi
+if [[ "$ENROLLMENT_ROLE" == "control-plane" ]] && "${SUDO[@]}" systemctl cat k3s-agent.service >/dev/null 2>&1; then
+    error "This machine already has a K3s worker service; refusing to change its role."
 fi
 
 command -v apt-get >/dev/null 2>&1 || error "This installer currently supports Debian/Ubuntu workers (apt-get is required)."
@@ -412,6 +480,8 @@ if [[ ${#missing_packages[@]} -gt 0 ]]; then
     "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing_packages[@]}" >/dev/null
 fi
 "${SUDO[@]}" systemctl enable --now iscsid >/dev/null 2>&1
+[[ -x "$LONGHORN_HOST_CONFIGURATOR" ]] || error "Longhorn host configurator is missing: $LONGHORN_HOST_CONFIGURATOR"
+"$LONGHORN_HOST_CONFIGURATOR"
 
 if [[ -x "$K3S_APPARMOR_INSTALLER" ]]; then
     info "Installing the enforced K3s AppArmor runtime profile..."
@@ -425,30 +495,47 @@ if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
 else
     info "Enforcing the local-only firewall before K3s enrollment..."
 fi
-K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" \
-    "$SECURITY_HARDENER" --apply --server-exposure local --node-role worker \
-    --control-plane-ip "$CONTROL_PLANE_IP" --ssh-port "$HARDENING_SSH_PORT"
+security_args=(--apply --server-exposure local --node-role "$ENROLLMENT_ROLE"
+    --control-plane-ip "$CONTROL_PLANE_IP" --ssh-port "$HARDENING_SSH_PORT")
+if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+    security_args+=(--private-control-plane)
+    [[ -x "$K3S_NETWORK_CONFIGURATOR" ]] || error "K3s network configurator is required for server joins."
+    "$K3S_NETWORK_CONFIGURATOR" --private-ip "$NODE_IP" --private-interface "$NODE_INTERFACE" --private-only
+fi
+K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" K3S_PRIVATE_ADDRESS="$NODE_IP" \
+    "$SECURITY_HARDENER" "${security_args[@]}"
 
 info "Checking access to $SERVER_URL..."
 curl -kfsS --connect-timeout 10 --max-time 20 "$SERVER_URL/cacerts" >/dev/null || \
     error "Cannot reach $SERVER_URL. Check routing and TCP port 6443 on the control-plane firewall."
 
 agent_args=(agent --node-ip "$NODE_IP" --flannel-iface "$NODE_INTERFACE")
+K3S_SERVICE=k3s-agent
+if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+    K3S_SERVICE=k3s
+    agent_args=(server --server "$SERVER_URL" --node-ip "$NODE_IP"
+        --advertise-address "$NODE_IP" --flannel-iface "$NODE_INTERFACE"
+        --disable traefik --secrets-encryption --write-kubeconfig-mode 600
+        --node-label svccontroller.k3s.cattle.io/enablelb=false)
+    if [[ "$CONTROL_PLANE_SCHEDULABLE" == "false" ]]; then
+        agent_args+=(--node-taint node-role.kubernetes.io/control-plane=true:NoSchedule)
+    fi
+fi
 if [[ -n "$NODE_LABELS" ]]; then
     IFS=',' read -r -a label_values <<< "$NODE_LABELS"
     for value in "${label_values[@]}"; do
         value="$(trim "$value")"
         [[ -n "$value" ]] || error "Labels cannot contain an empty item."
         case "${value%%=*}" in
-            svccontroller.k3s.cattle.io/enablelb|node-role.kubernetes.io/control-plane|node.bm-cluster.io/role|node.bm-cluster.io/exposure)
-                error "Reserved topology label cannot be set on a worker: ${value%%=*}"
+            svccontroller.k3s.cattle.io/enablelb|node-role.kubernetes.io/control-plane|node-role.kubernetes.io/master|node-role.kubernetes.io/etcd|node.bm-cluster.io/role|node.bm-cluster.io/exposure)
+                error "Reserved topology label cannot be set during node enrollment: ${value%%=*}"
                 ;;
         esac
         agent_args+=(--node-label "$value")
     done
 fi
 agent_args+=(
-    --node-label node.bm-cluster.io/role=worker
+    --node-label "node.bm-cluster.io/role=$ENROLLMENT_ROLE"
     --node-label node.bm-cluster.io/exposure=local
 )
 if [[ -n "$NODE_TAINTS" ]]; then
@@ -456,14 +543,25 @@ if [[ -n "$NODE_TAINTS" ]]; then
     for value in "${taint_values[@]}"; do
         value="$(trim "$value")"
         [[ -n "$value" ]] || error "Taints cannot contain an empty item."
+        case "${value%%[=:]*}" in
+            node-role.kubernetes.io/control-plane|node-role.kubernetes.io/master)
+                [[ "$ENROLLMENT_ROLE" != "control-plane" ]] || \
+                    error "Set control-plane NoSchedule through --control-plane-schedulable, not --taints."
+                ;;
+        esac
         agent_args+=(--node-taint "$value")
     done
 fi
 
-install_environment=(env "K3S_URL=$SERVER_URL" "K3S_TOKEN=$JOIN_TOKEN" "K3S_NODE_NAME=$NODE_NAME")
+# The join token travels over stdin/SSH and then in the installer's environment,
+# never as a process argument. K3s itself persists its root-only service token.
+export K3S_TOKEN="$JOIN_TOKEN"
+install_sudo=("${SUDO[@]}")
+[[ ${#SUDO[@]} -eq 0 ]] || install_sudo+=(--preserve-env=K3S_TOKEN)
+install_environment=(env "K3S_URL=$SERVER_URL" "K3S_NODE_NAME=$NODE_NAME")
 [[ -z "$K3S_VERSION" ]] || install_environment+=("INSTALL_K3S_VERSION=$K3S_VERSION")
 
-info "Installing K3s agent '$NODE_NAME'..."
+info "Installing K3s $ENROLLMENT_ROLE '$NODE_NAME'..."
 [[ -x "$K3S_REGISTRY_MIRROR_SCRIPT" ]] || \
     error "K3s registry mirror configurator is not executable: $K3S_REGISTRY_MIRROR_SCRIPT"
 K3S_REGISTRY_HOST="$REGISTRY_HOST" K3S_REGISTRY_ENDPOINT="$REGISTRY_ENDPOINT" \
@@ -476,17 +574,16 @@ curl --fail --location --silent --show-error \
     --connect-timeout 15 --max-time 180 \
     --output "$k3s_installer" https://get.k3s.io
 chmod 700 "$k3s_installer"
-"${SUDO[@]}" "${install_environment[@]}" sh "$k3s_installer" "${agent_args[@]}"
+"${install_sudo[@]}" "${install_environment[@]}" sh "$k3s_installer" "${agent_args[@]}"
 JOIN_TOKEN=""
-unset JOIN_TOKEN
+unset JOIN_TOKEN K3S_TOKEN
 
-"${SUDO[@]}" systemctl is-active --quiet k3s-agent || error "k3s-agent did not become active; inspect: sudo journalctl -u k3s-agent"
+"${SUDO[@]}" systemctl is-active --quiet "$K3S_SERVICE" || error "$K3S_SERVICE did not become active; inspect: sudo journalctl -u $K3S_SERVICE"
 
-info "Applying the mandatory local-only worker security policy..."
-K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" \
-    "$SECURITY_HARDENER" --apply --server-exposure local --node-role worker \
-    --control-plane-ip "$CONTROL_PLANE_IP" --ssh-port "$HARDENING_SSH_PORT"
+info "Applying the mandatory private $ENROLLMENT_ROLE security policy..."
+K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" K3S_PRIVATE_ADDRESS="$NODE_IP" \
+    "$SECURITY_HARDENER" "${security_args[@]}"
 
-info "Worker '$NODE_NAME' is running. On the control plane, verify it with:"
+info "$ENROLLMENT_ROLE '$NODE_NAME' is running. On the control plane, verify it with:"
 printf '  kubectl wait --for=condition=Ready node/%s --timeout=5m\n' "$NODE_NAME"
 printf '  kubectl get nodes -o wide\n'

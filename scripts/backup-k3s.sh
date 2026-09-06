@@ -10,14 +10,27 @@ fi
 
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/bm-cluster/k3s}"
 RETENTION_COUNT="${RETENTION_COUNT:-7}"
-K3S_DB="${K3S_DB:-/var/lib/rancher/k3s/server/db/state.db}"
+K3S_DATA_DIR="${K3S_DATA_DIR:-/var/lib/rancher/k3s}"
+K3S_CONFIG_DIR="${K3S_CONFIG_DIR:-/etc/rancher/k3s}"
+K3S_DB="${K3S_DB:-$K3S_DATA_DIR/server/db/state.db}"
+K3S_ETCD_DIR="$K3S_DATA_DIR/server/db/etcd"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 ARCHIVE="$BACKUP_DIR/k3s-$TIMESTAMP.tar.gz"
 
 [[ "$EUID" -eq 0 ]] || { echo "Run this backup as root." >&2; exit 1; }
 [[ "$RETENTION_COUNT" =~ ^[1-9][0-9]*$ ]] || { echo "RETENTION_COUNT must be a positive integer." >&2; exit 1; }
-[[ -f "$K3S_DB" ]] || { echo "K3s SQLite database not found: $K3S_DB" >&2; exit 1; }
-command -v sqlite3 >/dev/null || { echo "sqlite3 is required." >&2; exit 1; }
+command -v k3s >/dev/null || { echo "k3s is required." >&2; exit 1; }
+[[ -s "$K3S_DATA_DIR/server/token" ]] || { echo "K3s server token is required for a restorable backup." >&2; exit 1; }
+# A migrated server may retain state.db; embedded etcd always takes precedence.
+if [[ -d "$K3S_ETCD_DIR" ]]; then
+  DATASTORE=etcd
+elif [[ -f "$K3S_DB" ]]; then
+  DATASTORE=sqlite
+  command -v sqlite3 >/dev/null || { echo "sqlite3 is required for a SQLite datastore." >&2; exit 1; }
+else
+  echo "No supported local K3s datastore was found under $K3S_DATA_DIR/server/db." >&2
+  exit 1
+fi
 
 umask 077
 install -d -o root -g root -m 0700 "$BACKUP_DIR"
@@ -30,16 +43,30 @@ install -d -m 0700 "$staging_dir/k3s-db" "$staging_dir/k3s-server" \
   "$staging_dir/k3s-config" "$staging_dir/vault" "$staging_dir/application-data" \
   "$staging_dir/kubernetes"
 
-# SQLite's online backup API produces a transactionally consistent copy even
-# while K3s is serving traffic and its WAL is changing.
-backup_db="$staging_dir/k3s-db/state.db"
-sqlite3 "$K3S_DB" ".timeout 60000" ".backup '$backup_db'"
+if [[ "$DATASTORE" == "etcd" ]]; then
+  # Request a consistent snapshot from the local server into the protected
+  # staging directory. The completed archive follows the existing retention
+  # and encrypted off-node policy; no extra on-demand snapshots accumulate.
+  k3s etcd-snapshot save --server https://127.0.0.1:6443 \
+    --data-dir "$K3S_DATA_DIR" --name "bm-cluster-$TIMESTAMP" \
+    --etcd-snapshot-dir "$staging_dir/k3s-db" --etcd-s3=false
+  mapfile -t etcd_snapshots < <(find "$staging_dir/k3s-db" -maxdepth 1 -type f -name "bm-cluster-$TIMESTAMP*" -size +0c)
+  [[ ${#etcd_snapshots[@]} -eq 1 ]] || {
+    echo "K3s did not produce exactly one nonempty local etcd snapshot." >&2
+    exit 1
+  }
+  snapshot_name="$(basename "${etcd_snapshots[0]}")"
+else
+  # SQLite's online backup API produces a transactionally consistent copy even
+  # while K3s is serving traffic and its WAL is changing.
+  backup_db="$staging_dir/k3s-db/state.db"
+  sqlite3 "$K3S_DB" ".timeout 60000" ".backup '$backup_db'"
 
-# Compact only the staging copy to current state. Superseded revisions,
-# tombstones, previous values, and SQLite free pages are not needed to restore
-# the current Kubernetes objects and can retain deleted secrets indefinitely.
-# Never run these statements against the live K3s database.
-sqlite3 "$backup_db" <<'SQL'
+  # Compact only the staging copy to current state. Superseded revisions,
+  # tombstones, previous values, and SQLite free pages are not needed to restore
+  # the current Kubernetes objects and can retain deleted secrets indefinitely.
+  # Never run these statements against the live K3s database.
+  sqlite3 "$backup_db" <<'SQL'
 BEGIN IMMEDIATE;
 DELETE FROM kine
 WHERE id IN (
@@ -57,21 +84,25 @@ WHERE name != 'compact_rev_key';
 COMMIT;
 VACUUM;
 SQL
-[[ "$(sqlite3 "$backup_db" 'PRAGMA integrity_check;')" == "ok" ]] || {
-  echo "Backup database integrity check failed." >&2
-  exit 1
-}
+  [[ "$(sqlite3 "$backup_db" 'PRAGMA integrity_check;')" == "ok" ]] || {
+    echo "Backup database integrity check failed." >&2
+    exit 1
+  }
+fi
 
 for source_file in \
-  /var/lib/rancher/k3s/server/token \
-  /var/lib/rancher/k3s/server/cred/encryption-config.json \
-  /var/lib/rancher/k3s/server/cred/encryption-state.json; do
+  "$K3S_DATA_DIR/server/token" \
+  "$K3S_DATA_DIR/server/cred/encryption-config.json" \
+  "$K3S_DATA_DIR/server/cred/encryption-state.json"; do
   [[ -f "$source_file" ]] && install -m 0600 "$source_file" "$staging_dir/k3s-server/$(basename "$source_file")"
 done
 
-for source_file in /etc/rancher/k3s/config.yaml /etc/rancher/k3s/registries.yaml; do
+for source_file in "$K3S_CONFIG_DIR/config.yaml" "$K3S_CONFIG_DIR/registries.yaml"; do
   [[ -f "$source_file" ]] && install -m 0600 "$source_file" "$staging_dir/k3s-config/$(basename "$source_file")"
 done
+if [[ -d "$K3S_CONFIG_DIR/config.yaml.d" ]]; then
+  cp -a "$K3S_CONFIG_DIR/config.yaml.d" "$staging_dir/k3s-config/config.yaml.d"
+fi
 
 for source_file in /var/lib/bm-cluster/vault-unseal-key /var/lib/bm-cluster/vault-bootstrap-token; do
   [[ -f "$source_file" ]] && install -m 0600 "$source_file" "$staging_dir/vault/$(basename "$source_file")"
@@ -127,15 +158,39 @@ fi
 cat > "$staging_dir/RESTORE.txt" <<EOF
 Created: $TIMESTAMP
 K3s version: $(k3s --version | head -1)
+Datastore: $DATASTORE
 
 This archive contains credentials and encryption keys. Keep it root-only and
 is uploaded through an encrypted restic repository when off-node storage is
 configured. It also contains a Vault Raft snapshot and logical PostgreSQL and
 MongoDB dumps when those services were present. Longhorn recurring backups hold
-the remaining PVC data. Restore with the same K3s minor version; stop K3s first,
-restore state.db, the server token, encryption files, and K3s configuration,
-then start K3s and verify the output of: k3s secrets-encrypt status
+the remaining PVC data. Restore with the same K3s minor version. Restore the
+server token, encryption files, and K3s configuration (including config.yaml.d)
+before starting the restored server. Review node-specific private addresses,
+names, and join settings before reusing configuration on a replacement host.
 EOF
+if [[ "$DATASTORE" == "etcd" ]]; then
+  cat >> "$staging_dir/RESTORE.txt" <<EOF
+
+Embedded etcd: stop K3s on every server. On the first server, restore using:
+  k3s server --cluster-reset --etcd-s3=false \\
+    --cluster-reset-restore-path=/absolute/extracted/path/k3s-db/$snapshot_name \\
+    --token-file=/absolute/extracted/path/k3s-server/token
+Restart the first server without reset flags. Preserve each other server's old
+server/db directory outside the K3s data directory, then restart those servers
+to rejoin the restored cluster. Do not copy a snapshot over a live etcd database.
+Detailed procedure: https://docs.k3s.io/cli/etcd-snapshot#restoring-snapshots
+EOF
+else
+  cat >> "$staging_dir/RESTORE.txt" <<'EOF'
+
+SQLite: stop K3s, preserve the existing server/db directory, and restore
+k3s-db/state.db into a clean server/db directory before restarting K3s.
+If rolling back a SQLite-to-etcd migration, also remove the managed cluster-init
+drop-in from the restored configuration; never leave old etcd data beside it.
+EOF
+fi
+printf '\nAfter startup, verify: k3s secrets-encrypt status\n' >> "$staging_dir/RESTORE.txt"
 
 tar -C "$staging_dir" -czf "$ARCHIVE" .
 chmod 0600 "$ARCHIVE"

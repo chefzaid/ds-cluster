@@ -408,10 +408,10 @@
       register: foundation_apply
       changed_when: "'created' in foundation_apply.stdout or 'configured' in foundation_apply.stdout"
 
-    - name: Keep public load balancers and ingress on control-plane nodes
+    - name: Keep public load balancers on ingress-enabled control-plane nodes
       ansible.builtin.command: >-
         kubectl label nodes
-        -l node-role.kubernetes.io/control-plane
+        -l 'node-role.kubernetes.io/control-plane,svccontroller.k3s.cattle.io/enablelb!=false'
         svccontroller.k3s.cattle.io/enablelb=true
         node.bm-cluster.io/role=control-plane
         node.bm-cluster.io/exposure={{ server_exposure_mode }}
@@ -554,6 +554,7 @@
         --set controller.service.type=LoadBalancer
         --set controller.service.enableHttp=true
         --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true'
+        --set-string 'controller.nodeSelector.svccontroller\.k3s\.cattle\.io/enablelb=true'
         --set-string 'controller.tolerations[0].key=node-role.kubernetes.io/control-plane'
         --set-string 'controller.tolerations[0].operator=Exists'
         --set-string 'controller.tolerations[0].effect=NoSchedule'
