@@ -103,6 +103,13 @@ Longhorn compatibility validation.
 
 ## Checks and delivery
 
+Live rollout also exposed two causes of stale reporting. Trivy Operator reached
+its old 512 MiB memory limit and repeatedly failed health probes; its allocation
+is now 1 GiB. The configured ten-minute scan-job retention also exhausted the
+two-job concurrency limit because the operator counts completed jobs. Automatic
+job cleanup after report persistence is restored; report retention remains 24
+hours. No vulnerability report filters or severity suppressions were added.
+
 - DevApp: `mvn clean verify` passed, with 68 tests.
 - Indezy: all 517 tests and SpotBugs passed using the documented CI setting
   `-Djacoco.haltOnFailure=false`. Unmodified coverage policy still reports

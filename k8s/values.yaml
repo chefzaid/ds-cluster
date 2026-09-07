@@ -10,7 +10,9 @@ trivy-operator:
   fullnameOverride: trivy-operator
   targetWorkloads: "replicaset,statefulset,daemonset,cronjob"
   operator:
-    scanJobTTL: 10m
+    # Completed jobs also occupy the operator's concurrency limit. Let the
+    # operator delete jobs immediately after it persists their reports.
+    scanJobTTL: ""
     scanSecretTTL: 10m
     scanJobTimeout: 10m
     scanJobsConcurrentLimit: 2
