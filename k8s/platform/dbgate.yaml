@@ -58,6 +58,8 @@ spec:
           ports:
             - containerPort: 3000
           env:
+            - name: WORKSPACE_DIR
+              value: /home/node/.dbgate
             - name: CONNECTIONS
               value: "postgres,mongodb,redis"
             - name: LABEL_postgres
