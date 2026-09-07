@@ -240,7 +240,7 @@ spec:
             - |
               install -d -m 0700 /home/gitlab-runner/.gitlab-runner
               sed "s|__RUNNER_TOKEN__|${RUNNER_TOKEN}|g" /config/config.template.toml > /home/gitlab-runner/.gitlab-runner/config.toml
-              exec gitlab-runner run --user=gitlab-runner --working-directory=/home/gitlab-runner
+              exec gitlab-runner run --config=/home/gitlab-runner/.gitlab-runner/config.toml --user=gitlab-runner --working-directory=/home/gitlab-runner
           env:
             - name: RUNNER_TOKEN
               valueFrom:

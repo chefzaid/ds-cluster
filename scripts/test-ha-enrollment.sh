@@ -126,7 +126,8 @@ PY
 
 # The manager's network/SSH operations are mocked; evaluate only its actual
 # enrollment and count functions, never its host-changing top-level flow.
-# shellcheck disable=SC2034,SC2329
+# ShellCheck 0.10 reports indirect mock calls as SC2317; 0.11 uses SC2329.
+# shellcheck disable=SC2034,SC2317,SC2329
 (
     TEST_DIR="$(mktemp -d /tmp/bm-cluster-enrollment-manager-test.XXXXXX)"
     trap 'rm -r -- "$TEST_DIR"' EXIT

@@ -21,8 +21,9 @@ ARCHIVE="$BACKUP_DIR/k3s-$TIMESTAMP.tar.gz"
 [[ "$RETENTION_COUNT" =~ ^[1-9][0-9]*$ ]] || { echo "RETENTION_COUNT must be a positive integer." >&2; exit 1; }
 command -v k3s >/dev/null || { echo "k3s is required." >&2; exit 1; }
 [[ -s "$K3S_DATA_DIR/server/token" ]] || { echo "K3s server token is required for a restorable backup." >&2; exit 1; }
-# A migrated server may retain state.db; embedded etcd always takes precedence.
-if [[ -d "$K3S_ETCD_DIR" ]]; then
+# K3s can leave an empty etcd directory on SQLite servers. An initialized
+# member takes precedence over state.db retained by a migrated server.
+if [[ -d "$K3S_ETCD_DIR/member" ]]; then
   DATASTORE=etcd
 elif [[ -f "$K3S_DB" ]]; then
   DATASTORE=sqlite
@@ -47,7 +48,7 @@ if [[ "$DATASTORE" == "etcd" ]]; then
   # Request a consistent snapshot from the local server into the protected
   # staging directory. The completed archive follows the existing retention
   # and encrypted off-node policy; no extra on-demand snapshots accumulate.
-  k3s etcd-snapshot save --server https://127.0.0.1:6443 \
+  k3s etcd-snapshot save \
     --data-dir "$K3S_DATA_DIR" --name "bm-cluster-$TIMESTAMP" \
     --etcd-snapshot-dir "$staging_dir/k3s-db" --etcd-s3=false
   mapfile -t etcd_snapshots < <(find "$staging_dir/k3s-db" -maxdepth 1 -type f -name "bm-cluster-$TIMESTAMP*" -size +0c)

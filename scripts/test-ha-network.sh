@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Exercise HA network behavior with mocked host commands and Tailscale API calls.
 # Functions and fixture variables are consumed by the dynamically loaded code.
-# shellcheck disable=SC2034,SC2329
+# ShellCheck 0.10 reports indirect mock calls as SC2317; 0.11 uses SC2329.
+# shellcheck disable=SC2034,SC2317,SC2329
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

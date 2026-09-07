@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Exercise datastore selection and recovery archives without a running cluster.
 # Mock functions are invoked from the sourced production script.
-# shellcheck disable=SC2329
+# ShellCheck 0.10 reports indirect mock calls as SC2317; 0.11 uses SC2329.
+# shellcheck disable=SC2317,SC2329
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,7 +41,6 @@ run_backup() (
             case "$1" in
                 --etcd-snapshot-dir) snapshot_dir="$2"; shift 2 ;;
                 --name) snapshot_name="$2"; shift 2 ;;
-                --server) [[ "$2" == https://127.0.0.1:6443 ]] || return 1; shift 2 ;;
                 --data-dir) [[ "$2" == "$K3S_DATA_DIR" ]] || return 1; shift 2 ;;
                 --etcd-s3=false) shift ;;
                 *) return 1 ;;
@@ -61,6 +61,8 @@ run_backup() (
         "$SCRIPT_DIR/backup-k3s.sh")
 )
 
+# SQLite servers can have an empty etcd directory from initial installation.
+mkdir "$TEST_DIR/data/server/db/etcd"
 run_backup sqlite >/dev/null
 mapfile -t sqlite_archives < <(find "$TEST_DIR/sqlite" -name 'k3s-*.tar.gz')
 [[ ${#sqlite_archives[@]} -eq 1 ]]
@@ -74,7 +76,7 @@ cmp "$TEST_DIR/config/config.yaml.d/20-bm-private-node-network.yaml" \
     "$TEST_DIR/sqlite-extracted/k3s-config/config.yaml.d/20-bm-private-node-network.yaml"
 
 # Retain state.db to prove an etcd migration can never silently back up stale SQLite.
-mkdir "$TEST_DIR/data/server/db/etcd"
+mkdir "$TEST_DIR/data/server/db/etcd/member"
 run_backup etcd >/dev/null
 mapfile -t etcd_archives < <(find "$TEST_DIR/etcd" -name 'k3s-*.tar.gz')
 [[ ${#etcd_archives[@]} -eq 1 ]]
