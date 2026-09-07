@@ -25,7 +25,9 @@ normal `Delete` reclaim policy or provision a second, empty Odoo volume.
    are operational state, never committed into the manifests.
 5. Start Odoo in `corp`, verify health, database records and all pre-move filestore
    hashes, then create its Ingress and verify HTTPS and the Keycloak login link.
-6. Publish the namespace change, re-enable Argo, and verify the new revision.
+6. Use `kubectl apply set-last-applied` with the committed PVC manifest so the
+   temporary `volumeName` prebinding is no longer in its apply annotation.
+   Publish the namespace change, re-enable Argo, and verify the new revision.
    Remove old Odoo resources from `apps`, including owned reports and Secrets.
    Restore the PV's original reclaim policy only after the new binding is healthy.
 7. Delete the temporary recovery archives after verification. Confirm Longhorn

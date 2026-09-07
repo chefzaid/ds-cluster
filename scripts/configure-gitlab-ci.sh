@@ -336,3 +336,6 @@ if [[ "$CONFIGURE_REPOSITORY_SYNC" == "true" ]]; then
 else
   info "GitLab project, package/container registries, three-year retention, and instance-scoped Kubernetes runner are configured; repository sync was not requested"
 fi
+
+# Namespace-driven Sonar provisioning uses a separate group credential.
+"$SCRIPT_DIR/configure-sonar-discovery.sh"

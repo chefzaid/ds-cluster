@@ -1353,6 +1353,10 @@ EOF
         gitlab_revoke_ephemeral_admin_token
     fi
 
+    if [[ "$INSTALL_APPS" == "true" && "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
+        kubectl apply -f "$K8S_DIR/apps/sonar-apps-discovery.yaml"
+    fi
+
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
         step "Deploying Odoo in the corp namespace..."
         kubectl apply -f "$K8S_DIR/corp/odoo.yaml"

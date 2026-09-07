@@ -116,6 +116,13 @@ DDoS protection remain enabled. The setup token therefore needs `Bot Management
 Read` and `Bot Management Edit` zone permissions in addition to the permissions
 printed by the configurator.
 
+### Sonar source analysis
+
+[Namespace-driven Sonar analysis](docs/sonar-discovery.md) discovers source
+repositories behind workloads in `apps` every 15 minutes and provisions their
+Sonar projects. Default-branch CI analysis is automatic, with daily freshness
+checks and sequential scan-only pipelines. Odoo runs separately in `corp`.
+
 ### GitLab delivery
 
 The infrastructure repository lives at `<gitlab-group>/bm-cluster` in GitLab.

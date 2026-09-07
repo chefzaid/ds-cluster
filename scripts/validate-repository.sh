@@ -560,6 +560,14 @@ sed -nE 's/^[[:space:]]*-[[:space:]]*host:[[:space:]]*([^[:space:]]+).*/\1/p' "$
 comm -23 "$TEMP_DIR/public-hosts" "$TEMP_DIR/external-ingress-hosts" > "$TEMP_DIR/central-ingress-hosts"
 compare_sets "$TEMP_DIR/central-ingress-hosts" "$TEMP_DIR/ingress-hosts" "centrally owned public hosts have matching Ingress resources"
 
+if command -v node >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
+    if "$SCRIPT_DIR/test-sonar-discovery.sh"; then
+        pass "Sonar discovery, privacy, deduplication and scan-only scheduling"
+    else
+        fail "Sonar discovery, privacy, deduplication and scan-only scheduling"
+    fi
+fi
+
 info "Checking Kubernetes workload policy"
 image_failed=false
 while read -r location image; do

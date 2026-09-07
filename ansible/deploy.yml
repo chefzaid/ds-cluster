@@ -753,6 +753,12 @@
       no_log: true
       when: platform_services_enabled
 
+    - name: Enable namespace-driven Sonar analysis
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/apps/sonar-apps-discovery.yaml
+      register: sonar_discovery_apply
+      changed_when: "'created' in sonar_discovery_apply.stdout or 'configured' in sonar_discovery_apply.stdout"
+      when: apps_enabled and platform_services_enabled
+
     - name: Deploy Odoo and its ingress
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/corp/odoo.yaml
       register: odoo_apply
