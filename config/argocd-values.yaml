@@ -5,6 +5,10 @@ server:
 redis:
   enabled: true
 
+# Argo CD authenticates directly against Keycloak through oidc.config below.
+dex:
+  enabled: false
+
 configs:
   params:
     server.insecure: true

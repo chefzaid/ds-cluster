@@ -144,7 +144,7 @@ spec:
               drop: ["ALL"]
       containers:
         - name: bootstrap
-          image: docker.io/curlimages/curl@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b
+          image: docker.io/curlimages/curl@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
           env:
             - name: SONAR_ADMIN_TOKEN
               valueFrom:

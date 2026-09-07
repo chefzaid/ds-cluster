@@ -812,7 +812,7 @@ data:
         editable: false
         jsonData:
           timeField: "@timestamp"
-          esVersion: 9.4.2
+          esVersion: 9.4.6
           logMessageField: message
           logLevelField: level
         secureJsonData:
@@ -1062,7 +1062,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: grafana
-          image: docker.io/grafana/grafana@sha256:95a8098fb092130e111b0264a9be4d3a2bd5405e5dba88d4b8f1f630b389614e
+          image: docker.io/grafana/grafana@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

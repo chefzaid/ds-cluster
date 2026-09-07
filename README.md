@@ -613,6 +613,9 @@ and copies the Kubernetes `app` label to a keyword field. Kibana provisions an
 tails `/var/log/lynis-report.dat` on the control plane, Logstash parses its
 key/value and warning/suggestion fields, and Kibana provisions a **Lynis
 Security Audits** dashboard with a hardening-index trend and finding details.
+The [Trivy remediation record](docs/security-remediation.md) lists verified
+image fixes, remaining upstream findings and rollout requirements.
+
 Trivy Operator runs in `infra`, scans current workload revisions across all
 namespaces, and refreshes image/SBOM, configuration, RBAC, exposed-secret,
 infrastructure, and cluster-compliance reports. Prometheus scrapes its annotated

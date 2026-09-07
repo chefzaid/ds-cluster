@@ -234,7 +234,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: gitlab-runner
-          image: docker.io/gitlab/gitlab-runner@sha256:058d98c08c777f216ee148d5b72215029202784774ec153b7c29b29651a7a444
+          image: docker.io/gitlab/gitlab-runner@sha256:74209bd51542dc0cb8aa584f103b34c857ff240c3a275559af307c1cb1efbe4f
           command: ["/bin/sh", "-ceu"]
           args:
             - |

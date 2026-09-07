@@ -592,7 +592,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: reconcile
-          image: docker.io/curlimages/curl@sha256:5a91ea0c9c3ee27b4abe657b68cf6bf0676afa13b236b3bda34283cb3924d4f6
+          image: docker.io/curlimages/curl@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
           command: ["/bin/sh", "/opt/swirlit/reconcile.sh"]
           envFrom:
             - secretRef:
@@ -664,7 +664,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: oauth2-proxy
-          image: quay.io/oauth2-proxy/oauth2-proxy@sha256:87182a111468b419c262d690728df9fd0959de6e56c05f11f58b863f63d90081
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded
           args:
             - --provider=keycloak-oidc
             - --oidc-issuer-url=https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit

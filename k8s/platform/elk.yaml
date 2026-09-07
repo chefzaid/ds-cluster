@@ -269,7 +269,7 @@ spec:
           mountPath: /data
       containers:
       - name: elasticsearch
-        image: docker.elastic.co/elasticsearch/elasticsearch@sha256:857f6e8e25cdabf6e8225eaaf67fd8e0729bbd214731e4e117503f7f4b11636c
+        image: docker.elastic.co/elasticsearch/elasticsearch:9.4.6@sha256:6650a69591cddfb3afc1a586ce3796c5c0099852d8429fe13e71ec18e0150135
         ports:
         - containerPort: 9200
         - containerPort: 9300
@@ -355,7 +355,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: configure-security
-          image: docker.io/curlimages/curl@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b
+          image: docker.io/curlimages/curl@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
           envFrom:
             - secretRef:
                 name: elasticsearch-security-bootstrap
@@ -673,7 +673,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: sync
-        image: docker.elastic.co/kibana/kibana@sha256:862c968ad7dc3d4e51af83fa30b25c0556b235f54f5a8917284eab7cf322381f
+        image: docker.elastic.co/kibana/kibana:9.4.6@sha256:9cf14dae746aa808f7233299b856cd0ae275c2418607b1cc7ee23771fe324cad
         command: ["/usr/share/kibana/node/default/bin/node", "/opt/keycloak-sync/sync.mjs"]
         envFrom:
         - secretRef:
@@ -745,7 +745,7 @@ spec:
               type: RuntimeDefault
           containers:
           - name: sync
-            image: docker.elastic.co/kibana/kibana@sha256:862c968ad7dc3d4e51af83fa30b25c0556b235f54f5a8917284eab7cf322381f
+            image: docker.elastic.co/kibana/kibana:9.4.6@sha256:9cf14dae746aa808f7233299b856cd0ae275c2418607b1cc7ee23771fe324cad
             command: ["/usr/share/kibana/node/default/bin/node", "/opt/keycloak-sync/sync.mjs"]
             envFrom:
             - secretRef:
@@ -828,7 +828,7 @@ spec:
           type: RuntimeDefault
       initContainers:
       - name: configure-lynis-index
-        image: docker.io/curlimages/curl@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b
+        image: docker.io/curlimages/curl@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
         env:
         - name: ELASTICSEARCH_USERNAME
           valueFrom:
@@ -878,7 +878,7 @@ spec:
           readOnly: true
       containers:
       - name: logstash
-        image: docker.elastic.co/logstash/logstash@sha256:a0664a36744b4767b8648d24d1fa676f92349f24b69302879fcd7da0798b42fd
+        image: docker.elastic.co/logstash/logstash:9.4.6@sha256:18ffa5614f97de09a02fdd021c53d3f648ad60f1a89f0fa87e9f448cea840560
         ports:
         - containerPort: 5000
           name: tcp-input
@@ -1119,7 +1119,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: kibana
-        image: docker.elastic.co/kibana/kibana@sha256:862c968ad7dc3d4e51af83fa30b25c0556b235f54f5a8917284eab7cf322381f
+        image: docker.elastic.co/kibana/kibana:9.4.6@sha256:9cf14dae746aa808f7233299b856cd0ae275c2418607b1cc7ee23771fe324cad
         args:
         - /usr/local/bin/kibana-docker
         - --xpack.cloud_connect.enabled=false
