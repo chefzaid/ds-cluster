@@ -69,7 +69,7 @@ show their purpose and live Kubernetes status without exposing them publicly.
 This repository owns Odoo in the `corp` namespace, reserved for corporate/vendor
 software. First-party source applications run in `apps`. See the
 [Odoo namespace migration](docs/odoo-namespace.md) before updating an older
-installation and [platform themes](docs/platform-themes.md) for Odoo dark mode.
+installation and [platform themes](docs/platform-themes.md) for Sonar and Odoo dark mode.
 DevApp, Thoughty,
 Indezy, and the public website publish dashboard entries from their own
 Kubernetes Ingress annotations, without adding application-specific runtime
