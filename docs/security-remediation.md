@@ -1,9 +1,8 @@
 # Trivy remediation — 2026-09-07
 
-This change updates the platform's desired state and fixes application images
-in their owning repositories. The evidence below covers locally built images
-and manifest dry runs. The running cluster continues reporting its current
-images until the corresponding releases and reconciliations finish.
+This remediation updates platform images and application images in their
+owning repositories. Validation covers local image builds, GitLab pipelines,
+GitOps rollouts and Trivy reports for the deployed image digests.
 
 ## Verification method
 
@@ -18,9 +17,9 @@ CVEs; the same CVE can appear in several binaries. No findings were suppressed.
 
 | Repository | Change | Final image scan |
 | --- | --- | --- |
-| DevApp | Spring Boot 4.1.1, Tomcat 11.0.25, LZ4 1.11.1 and Alpine package updates | User and order images: zero vulnerabilities |
+| DevApp | Spring Boot 4.1.1, Tomcat 11.0.25, LZ4 1.11.1 and Alpine package updates | User, order and web images: zero vulnerabilities |
 | Indezy | Spring Boot 4.1.1, Tomcat 11.0.25, NGINX 1.30.4 and Alpine package updates | Server and web images: zero vulnerabilities |
-| Thoughty | Pinned Node 22.23.2, Alpine package updates, `qs` 6.16.0, npm/Yarn removed from runtime | Server/worker image: zero vulnerabilities |
+| Thoughty | Pinned Node 22.23.2, Alpine package updates, `qs` 6.16.0, npm/Yarn removed from runtime | Server/worker and web images: zero vulnerabilities |
 | Website | Pinned Node 24.19.0 on Alpine, package updates, npm/Yarn removed from runtime | Website image: zero vulnerabilities |
 
 Thoughty's production migration hook now executes `node dist/scripts/migrate.js`
@@ -70,7 +69,12 @@ session creation with a relative redirect, and existing-session forwarding.
 Temporary NGINX paths are under `/tmp`; the sidecar drops all capabilities.
 
 The K3s installer default advances to 1.36.4+k3s1, which updates containerd and
-the local-path provisioner. Existing nodes require a separate upgrade.
+the local-path provisioner. The control-plane node was also upgraded using a
+checksum-verified binary after a verified recovery backup. Its original
+service configuration was preserved; node readiness and encryption were
+verified afterward. The installed backup script was corrected to distinguish
+an empty etcd directory from an initialized etcd member and to use supported
+snapshot flags. SQLite and etcd recovery tests passed.
 The current release retains the same CoreDNS and metrics-server versions.
 
 Upstream release information:
@@ -98,6 +102,11 @@ changing its base distribution also needs database collation and extension
 review. MongoDB remains constrained to the compatible 7.0 line by the node's
 kernel, as documented beside its image. No database major-version change is
 part of this remediation.
+
+The PostgreSQL client containers used by Indezy's database readiness check and
+Thoughty's suspended backup job also retain vendor-image findings. They are
+separate from the clean application runtime images listed above. Findings
+labelled Unknown remain included in the checks and visible in the dashboard.
 
 Ingress NGINX, Longhorn/CSI, K3s system components, Vault, Trivy, External
 Secrets, Prometheus, Alertmanager, Kafka, Kafka UI, SonarQube, DBGate and
@@ -128,14 +137,23 @@ hours. No vulnerability report filters or severity suppressions were added.
   HTTP smoke test passed.
 - Indezy web: production build, NGINX configuration and read-only container
   SPA/health smoke checks passed.
-- Platform: all 49 repository validation checks passed. Both Helm charts
+- Platform: all 50 repository and live validation checks passed. Both Helm charts
   rendered, Dex resources were absent from the Argo CD chart, and 91 platform
   resources passed Kubernetes server-side dry-run. All three application
   manifest sets also passed server-side dry-run; both Thoughty overlays render.
 
-Publish each application's tested images through its existing release pipeline
-and reconcile its own Argo CD application. Platform manifest updates use the
-`bm-cluster` application; Argo CD Helm settings and the K3s version need the
-repository's operator reconciliation/upgrade workflow. After rollout, verify
-workload health and allow Trivy Operator to generate reports for the new image
-digests. These local scans do not demonstrate that production has been remediated.
+Application releases use their existing GitLab pipelines and their own Argo CD
+applications. The platform rollout uses the `bm-cluster` application. Argo CD's
+Helm release was separately upgraded to the configured version with an atomic,
+waited upgrade. GitOps, platform-service and registry-write CI checks passed.
+
+Verify the running image digest against its current Trivy report, including
+Unknown findings, before treating an application image as clean. Reports from
+retired ReplicaSets can outlive their pods. The cleanup used here archives the
+original reports and expires only reports whose owner has zero desired and
+actual replicas, no active pods, and a healthy newer deployment revision.
+Current workload reports and vulnerability severities remain unchanged.
+
+Live report snapshots and operational values are kept outside the repository.
+The Grafana dashboard remains the source for current totals; the comparisons
+above record the image scans performed during this remediation.
