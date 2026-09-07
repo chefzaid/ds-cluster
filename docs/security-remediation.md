@@ -42,6 +42,7 @@ and [pgJDBC changelog](https://jdbc.postgresql.org/changelogs/).
 | OAuth2 Proxy | 7.15.4 | 3 / 38 | 0 / 1 |
 | Elasticsearch | 9.4.6 | 0 / 101 | 0 / 40 |
 | Kibana | 9.4.6 | 2 / 85 | 0 / 9 |
+| Kibana authentication sidecar | NGINX 1.30.4 Alpine | 3 / 39 | 0 / 7 |
 | Logstash | 9.4.6 | 2 / 68 | 0 / 15 |
 | Filebeat | 9.4.6 Wolfi | 1 / 56 | 0 / 0 |
 | Grafana | 13.2.1 | 5 / 179 | 3 / 159 |
@@ -61,6 +62,12 @@ this repository, and the Alpine variant passed startup and PING checks.
 Filebeat uses the official Wolfi variant because the standard 9.4.6 image
 requires x86-64-v3 CPU features unavailable on this node. The Wolfi image
 passed a read-only startup check and a fresh vulnerability scan.
+
+Kibana's authentication sidecar uses the official NGINX image with its njs
+module instead of carrying an ingress-controller binary. A non-root, read-only
+container smoke test covered health, anonymous and forged-identity rejection,
+session creation with a relative redirect, and existing-session forwarding.
+Temporary NGINX paths are under `/tmp`; the sidecar drops all capabilities.
 
 The K3s installer default advances to 1.36.4+k3s1, which updates containerd and
 the local-path provisioner. Existing nodes require a separate upgrade.
