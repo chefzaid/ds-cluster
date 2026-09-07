@@ -82,9 +82,9 @@ spec:
       automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
@@ -96,6 +96,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           args:
             - --admin-password-file=/run/portainer-secret/password
           ports:
@@ -136,6 +137,8 @@ spec:
             - name: admin-password
               mountPath: /run/portainer-secret
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -147,3 +150,6 @@ spec:
             items:
               - key: ADMIN_PASSWORD
                 path: password
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

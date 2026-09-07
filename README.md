@@ -602,6 +602,20 @@ kubectl get ingress -A
 kubectl get pvc -A
 ```
 
+Longhorn reclaims deleted-file blocks every Sunday at 05:30 UTC through
+`k8s/platform/longhorn-maintenance.yaml`, deployed by the platform installers
+and Argo CD. The recurring filesystem-trim job processes one volume at a time
+in the `default` and `bm-cluster` recurring-job groups. Newly created volumes
+without a custom schedule join `default`; volumes enrolled in off-node backups
+also receive `bm-cluster`. Detached volumes are skipped while Longhorn's
+`allow-recurring-job-while-volume-detached` setting remains disabled.
+Keep `remove-snapshots-during-filesystem-trim=false` and the per-volume
+`unmapMarkSnapChainRemoved` setting at `ignored` or `disabled` to preserve
+intentional snapshots. Retire obsolete upgrade snapshots separately through
+Longhorn's snapshot delete/purge operations, then trim the filesystem again;
+never delete replica files directly. See the
+[Longhorn trim documentation](https://longhorn.io/docs/1.12.1/nodes-and-volumes/volumes/trim-filesystem/).
+
 Prometheus discovers metrics from any pod carrying `prometheus.io/scrape`,
 `prometheus.io/path`, and `prometheus.io/port` annotations. Grafana discovers
 application-owned dashboard ConfigMaps labeled `grafana_dashboard: "1"` in any

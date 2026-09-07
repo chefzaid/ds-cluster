@@ -448,19 +448,20 @@ spec:
                   app: homepage
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
       - name: homepage
-        image: ghcr.io/gethomepage/homepage@sha256:753eeb0cc22ab7baad39ed47cbd1aae14e193dd1b264e965f193a9ea1d1e1bdd
+        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/homepage@sha256:5a7718ef79c4633f1ac24180ef5f275416748ff13f98a6c2985fafdc5777db54
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
+          readOnlyRootFilesystem: true
         env:
         - name: MY_POD_IP
           valueFrom:
@@ -543,6 +544,10 @@ spec:
           readOnly: true
         - name: homepage-logs
           mountPath: /app/config/logs
+        - name: tmp
+          mountPath: /tmp
+        - name: next-cache
+          mountPath: /app/.next/cache
       volumes:
       - name: homepage-config
         configMap:
@@ -550,6 +555,14 @@ spec:
       - name: homepage-logs
         emptyDir: {}
 
+      - name: tmp
+        emptyDir:
+          sizeLimit: 256Mi
+      - name: next-cache
+        emptyDir:
+          sizeLimit: 256Mi
+      imagePullSecrets:
+      - name: platform-registry-auth
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

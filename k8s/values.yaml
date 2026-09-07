@@ -20,7 +20,9 @@ trivy-operator:
     builtInTrivyServer: true
     accessGlobalSecretsAndServiceAccount: true
     privateRegistryScanSecretsNames:
-      apps: devapp-registry-auth,indezy-registry-auth,thoughty-registry-auth,website-registry-auth
+      apps: devapp-registry-auth,indezy-registry-auth,thoughty-registry-auth,website-registry-auth,platform-registry-auth
+      infra: platform-registry-auth
+      gitlab-runners: platform-registry-auth
     metricsFindingsEnabled: true
     metricsVulnIdEnabled: true
     metricsExposedSecretInfo: true
@@ -34,6 +36,8 @@ trivy-operator:
     repository: aquasec/trivy-operator
     tag: "0.34.0@sha256:8123bd89b5f089cb5148123bb2b7a23f4d3cee305dd59132616f73776ef8bc9a"
     pullPolicy: IfNotPresent
+    pullSecrets:
+    - name: platform-registry-auth
   service:
     headless: false
   podAnnotations:
@@ -42,9 +46,9 @@ trivy-operator:
     prometheus.io/port: "8080"
   podSecurityContext:
     runAsNonRoot: true
-    runAsUser: 10000
-    runAsGroup: 10000
-    fsGroup: 10000
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
     seccompProfile:
       type: RuntimeDefault
   resources:
@@ -99,6 +103,7 @@ trivy-operator:
         fsGroup: 65534
         seccompProfile:
           type: RuntimeDefault
+        runAsGroup: 65534
       securityContext:
         privileged: false
         allowPrivilegeEscalation: false
@@ -128,3 +133,18 @@ trivy-operator:
     registry: ghcr.io
     repository: aquasecurity/node-collector
     tag: "0.3.1@sha256:1a71cf109dc167af84c636fd07c0526ef601ed9f67234115d6ae52b5c013866a"
+  extraEnv:
+  - name: OPERATOR_POLICY_DATA_DIRS
+    value: /etc/trivy-policy-data
+  volumes:
+  - name: cache-policies
+    emptyDir: {}
+  - name: policy-data
+    configMap:
+      name: trivy-policy-data
+  volumeMounts:
+  - name: cache-policies
+    mountPath: /tmp
+  - name: policy-data
+    mountPath: /etc/trivy-policy-data
+    readOnly: true

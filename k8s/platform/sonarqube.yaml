@@ -48,7 +48,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate-sso-identity
-          image: postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fba036548773c53b2f16a8871
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/postgres-client@sha256:0fbebd30e2814439e79bf53ca0187f2bfd9ff593edbb8a15a5b001daad698bdb
           env:
             - name: SONAR_DB_PASSWORD
               valueFrom:
@@ -136,8 +136,8 @@ spec:
               memory: 64Mi
           securityContext:
             runAsNonRoot: true
-            runAsUser: 999
-            runAsGroup: 999
+            runAsUser: 10001
+            runAsGroup: 10001
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -190,6 +190,8 @@ spec:
             capabilities:
               drop: ["ALL"]
 
+      imagePullSecrets:
+      - name: platform-registry-auth
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -250,51 +252,21 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
       initContainers:
-      - name: init-sysctl
-        image: busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
-        command: ["sysctl", "-w", "vm.max_map_count=262144"]
-        securityContext:
-          privileged: true
-        resources:
-          requests:
-            cpu: 10m
-            memory: 16Mi
-          limits:
-            cpu: 100m
-            memory: 64Mi
-      - name: init-chown
-        image: busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
-        command: ["sh", "-c", "chown -R 1000:1000 /opt/sonarqube/data /opt/sonarqube/extensions /opt/sonarqube/logs"]
-        securityContext:
-          runAsUser: 0
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop: ["ALL"]
-            add: ["CHOWN"]
-        resources:
-          requests:
-            cpu: 10m
-            memory: 16Mi
-          limits:
-            cpu: 100m
-            memory: 64Mi
-        volumeMounts:
-        - name: sonarqube-data
-          mountPath: /opt/sonarqube/data
-        - name: sonarqube-extensions
-          mountPath: /opt/sonarqube/extensions
-        - name: sonarqube-logs
-          mountPath: /opt/sonarqube/logs
       - name: init-database
-        image: postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fba036548773c53b2f16a8871
+        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/postgres-client@sha256:0fbebd30e2814439e79bf53ca0187f2bfd9ff593edbb8a15a5b001daad698bdb
         securityContext:
           runAsNonRoot: true
-          runAsUser: 999
-          runAsGroup: 999
+          runAsUser: 10001
+          runAsGroup: 10001
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
+          readOnlyRootFilesystem: true
         env:
         - name: POSTGRES_ADMIN_USER
           valueFrom:
@@ -377,6 +349,10 @@ spec:
           mountPath: /opt/sonarqube/extensions
         - name: sonarqube-logs
           mountPath: /opt/sonarqube/logs
+        - name: sonarqube-temp
+          mountPath: /opt/sonarqube/temp
+        - name: tmp
+          mountPath: /tmp
         resources:
           requests:
             memory: "2Gi"
@@ -391,6 +367,7 @@ spec:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
+          readOnlyRootFilesystem: true
         startupProbe:
           exec:
             command:
@@ -425,6 +402,14 @@ spec:
       - name: sonarqube-logs
         persistentVolumeClaim:
           claimName: sonarqube-logs
+      - name: sonarqube-temp
+        emptyDir:
+          sizeLimit: 512Mi
+      - name: tmp
+        emptyDir:
+          sizeLimit: 512Mi
+      imagePullSecrets:
+      - name: platform-registry-auth
 ---
 apiVersion: v1
 kind: Service

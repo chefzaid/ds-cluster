@@ -2,10 +2,34 @@ server:
   service:
     type: ClusterIP
 
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: '1'
+      memory: 512Mi
 redis:
   enabled: true
 
 # Argo CD authenticates directly against Keycloak through oidc.config below.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: '1'
+      memory: 256Mi
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  image:
+    repository: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/redis
+    tag: 20260907.1@sha256:840b1a927e22d5f13b58c001588b89766c7ff972d4802a9e5df70ac294971973
 dex:
   enabled: false
 
@@ -31,3 +55,62 @@ configs:
     policy.csv: |
       g, platform-admins, role:admin
     scopes: '[groups]'
+global:
+  securityContext: &id001
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  imagePullSecrets:
+  - name: platform-registry-auth
+controller:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: '1'
+      memory: 1Gi
+repoServer:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: '1'
+      memory: 768Mi
+  copyutil:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+applicationSet:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: '1'
+      memory: 256Mi
+notifications:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: '1'
+      memory: 128Mi
+redisSecretInit:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: '1'
+      memory: 64Mi
+  securityContext: *id001

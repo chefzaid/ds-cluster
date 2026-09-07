@@ -177,15 +177,15 @@ spec:
           restartPolicy: Never
           securityContext:
             runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
-            fsGroup: 1000
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
             seccompProfile:
               type: RuntimeDefault
           containers:
             - name: cleanup
-              image: docker.io/gitlab/gitlab-ce@sha256:f7e453ff51d1910235365085fe836e4589716d26b44d99a8aa3e2c41377f034f
-              command: ["/opt/gitlab/embedded/bin/ruby", "/scripts/cleanup.rb"]
+              image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ruby-helper@sha256:16c59a86fabfcc0217b7fe40bd65ad0f04818afc80be006ba64c7a3cbb1f3f9b
+              command: [ruby, /scripts/cleanup.rb]
               env:
                 - name: GITLAB_API_URL
                   value: http://gitlab.__INTERNAL_DNS_ZONE__/api/v4
@@ -224,3 +224,5 @@ spec:
             - name: tmp
               emptyDir:
                 sizeLimit: 16Mi
+          imagePullSecrets:
+          - name: platform-registry-auth

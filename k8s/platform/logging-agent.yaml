@@ -254,6 +254,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           resources:
             requests:
               cpu: 20m
@@ -298,6 +299,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           volumeMounts:
             - name: config
               mountPath: /fluent-bit/etc/fluent-bit.conf

@@ -197,6 +197,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           args:
             - |
               umask 077
@@ -248,6 +249,8 @@ spec:
           volumeMounts:
             - name: odoo-config
               mountPath: /etc/odoo-generated
+            - name: tmp
+              mountPath: /tmp
         - name: bootstrap-database
           image: odoo@sha256:7fcd40c8638205f4844240397712ebbaa07918eb54f734f09e2c61274c3ae83f
           command: ["/bin/bash", "-ec"]
@@ -255,6 +258,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           args:
             - |
               until PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" psql \
@@ -409,6 +413,8 @@ spec:
             - name: odoo-keycloak-sso-addon
               mountPath: /mnt/extra-addons/odoo_keycloak_sso
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
       containers:
         - name: odoo
           image: odoo@sha256:7fcd40c8638205f4844240397712ebbaa07918eb54f734f09e2c61274c3ae83f
@@ -427,6 +433,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           startupProbe:
             httpGet:
               path: /web/login?local=1
@@ -460,6 +467,8 @@ spec:
             - name: odoo-keycloak-sso-addon
               mountPath: /mnt/extra-addons/odoo_keycloak_sso
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
       terminationGracePeriodSeconds: 60
       volumes:
         - name: odoo-config
@@ -471,6 +480,9 @@ spec:
           configMap:
             name: odoo-keycloak-sso-addon
 
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

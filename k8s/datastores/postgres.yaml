@@ -89,6 +89,7 @@ spec:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
+          readOnlyRootFilesystem: true
         env:
         - name: POSTGRES_DB
           valueFrom:
@@ -115,6 +116,10 @@ spec:
         - mountPath: /docker-entrypoint-initdb.d/init.sql
           subPath: init.sql
           name: postgres-init
+        - name: tmp
+          mountPath: /tmp
+        - name: postgres-run
+          mountPath: /var/run/postgresql
         livenessProbe:
           exec:
             command:
@@ -149,3 +154,9 @@ spec:
       - name: postgres-init
         configMap:
           name: postgres-init-script
+      - name: tmp
+        emptyDir:
+          sizeLimit: 256Mi
+      - name: postgres-run
+        emptyDir:
+          sizeLimit: 256Mi

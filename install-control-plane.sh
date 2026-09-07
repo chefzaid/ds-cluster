@@ -1189,6 +1189,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
             --namespace infra \
             --version "$INGRESS_NGINX_CHART_VERSION" \
+            --values "$SCRIPT_DIR/config/ingress-nginx-values.yaml" \
             --set controller.service.type=LoadBalancer \
             --set controller.service.enableHttp=true \
             --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true' \
@@ -1246,6 +1247,7 @@ EOF
         helm upgrade --install external-secrets external-secrets/external-secrets \
             --namespace infra \
             --version "$EXTERNAL_SECRETS_CHART_VERSION" \
+            --values "$SCRIPT_DIR/config/external-secrets-values.yaml" \
             --set installCRDs=true \
             --wait --timeout "$EXTERNAL_SECRETS_HELM_TIMEOUT"
 

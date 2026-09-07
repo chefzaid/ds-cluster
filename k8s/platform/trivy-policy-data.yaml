@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trivy-policy-data
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+data:
+  registries.yaml: |
+    # Explicit upstream publishers plus the platform's authenticated registry.
+    # All image digest pins and all other configuration checks remain enforced.
+    ksv0125:
+      trusted_registries:
+        - registry.__PUBLIC_DOMAIN__
+        - docker.io
+        - registry.k8s.io
+        - ghcr.io
+        - quay.io
+        - docker.elastic.co
+        - cr.fluentbit.io
+        - ecr-public.aws.com
+        - public.ecr.aws
+        - gcr.io

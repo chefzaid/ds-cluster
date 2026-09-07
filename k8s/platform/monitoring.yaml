@@ -699,6 +699,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           args:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.path=/prometheus
@@ -1056,10 +1057,12 @@ spec:
       automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
-        fsGroup: 472
+        fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
+        runAsUser: 10001
+        runAsGroup: 10001
       containers:
         - name: grafana
           image: docker.io/grafana/grafana@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283
@@ -1067,6 +1070,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           ports:
             - name: http
               containerPort: 3000
@@ -1156,12 +1160,17 @@ spec:
             - name: kubernetes-dashboard
               mountPath: /var/lib/grafana/dashboards/kubernetes
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: grafana-logs
+              mountPath: /var/log/grafana
         - name: dashboard-sidecar
           image: ghcr.io/kiwigrid/k8s-sidecar@sha256:440db6dcf9a724fa2c167612e147ad8839e75104732dc7ec89783e73199837f0
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           env:
             - name: METHOD
               value: WATCH
@@ -1187,6 +1196,8 @@ spec:
           volumeMounts:
             - name: dashboard-files
               mountPath: /var/lib/grafana/dashboards
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -1202,3 +1213,9 @@ spec:
         - name: kubernetes-dashboard
           configMap:
             name: grafana-kubernetes-dashboard
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: grafana-logs
+          emptyDir:
+            sizeLimit: 256Mi

@@ -76,6 +76,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           env:
             - name: MONGO_INITDB_ROOT_USERNAME
               valueFrom:
@@ -97,6 +98,8 @@ spec:
           volumeMounts:
             - mountPath: /data/db
               name: mongodb-storage
+            - name: tmp
+              mountPath: /tmp
           livenessProbe:
             tcpSocket:
               port: 27017
@@ -118,3 +121,6 @@ spec:
         - name: mongodb-storage
           persistentVolumeClaim:
             claimName: mongodb-pvc
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

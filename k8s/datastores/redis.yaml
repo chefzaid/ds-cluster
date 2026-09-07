@@ -35,17 +35,19 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 999
+        runAsUser: 10001
+        runAsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+        fsGroup: 10001
       containers:
       - name: redis
-        image: redis:8.10.0-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241
+        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/redis@sha256:840b1a927e22d5f13b58c001588b89766c7ff972d4802a9e5df70ac294971973
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
+          readOnlyRootFilesystem: true
         ports:
         - containerPort: 6379
         readinessProbe:
@@ -65,3 +67,12 @@ spec:
           limits:
             cpu: 200m
             memory: 256Mi
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+      volumes:
+      - name: redis-data
+        emptyDir:
+          sizeLimit: 256Mi
+      imagePullSecrets:
+      - name: platform-registry-auth

@@ -46,9 +46,9 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
@@ -107,10 +107,13 @@ spec:
           volumeMounts:
             - name: dbgate-data
               mountPath: /home/node/.dbgate
+            - name: tmp
+              mountPath: /tmp
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           readinessProbe:
             httpGet:
               path: /
@@ -134,3 +137,6 @@ spec:
         - name: dbgate-data
           persistentVolumeClaim:
             claimName: dbgate-pvc
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

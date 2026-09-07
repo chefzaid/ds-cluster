@@ -1,0 +1,17 @@
+apiVersion: longhorn.io/v1beta2
+kind: RecurringJob
+metadata:
+  name: bm-cluster-weekly-trim
+  namespace: longhorn-system
+spec:
+  # Sunday at 05:30 UTC, outside the 03:15 daily backup window.
+  cron: "30 5 * * 0"
+  task: filesystem-trim
+  groups:
+    # Longhorn assigns this group to volumes without an explicit schedule.
+    - default
+    # Include volumes enrolled in the optional off-node backup policy.
+    - bm-cluster
+  retain: 0
+  concurrency: 1
+  labels: {}

@@ -247,26 +247,6 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
-      initContainers:
-      - name: fix-permissions
-        image: busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
-        command: ["sh", "-c", "mkdir -p /data/esdata && chown -R 1000:1000 /data"]
-        securityContext:
-          runAsUser: 0
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop: ["ALL"]
-            add: ["CHOWN"]
-        resources:
-          requests:
-            cpu: 10m
-            memory: 16Mi
-          limits:
-            cpu: 100m
-            memory: 64Mi
-        volumeMounts:
-        - name: es-data
-          mountPath: /data
       containers:
       - name: elasticsearch
         image: docker.elastic.co/elasticsearch/elasticsearch:9.4.6@sha256:6650a69591cddfb3afc1a586ce3796c5c0099852d8429fe13e71ec18e0150135
@@ -739,10 +719,11 @@ spec:
           automountServiceAccountToken: false
           securityContext:
             runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
+            runAsUser: 10001
+            runAsGroup: 10001
             seccompProfile:
               type: RuntimeDefault
+            fsGroup: 10001
           containers:
           - name: sync
             image: docker.elastic.co/kibana/kibana:9.4.6@sha256:9cf14dae746aa808f7233299b856cd0ae275c2418607b1cc7ee23771fe324cad
@@ -1204,7 +1185,7 @@ spec:
           timeoutSeconds: 5
           failureThreshold: 6
       - name: public-auth-filter
-        image: docker.io/library/nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/nginx@sha256:60fc1623a3e0c16a45cdfb0ca57034173af24ac5abf0086abd057d1f5100c5a6
         command: ["/bin/sh", "-ec"]
         args:
         - |
@@ -1226,8 +1207,8 @@ spec:
             cpu: "5m"
         securityContext:
           runAsNonRoot: true
-          runAsUser: 101
-          runAsGroup: 82
+          runAsUser: 10001
+          runAsGroup: 10001
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
@@ -1258,3 +1239,5 @@ spec:
       - name: kibana-public-auth-filter-tmp
         emptyDir:
           sizeLimit: "64Mi"
+      imagePullSecrets:
+      - name: platform-registry-auth

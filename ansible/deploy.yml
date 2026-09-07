@@ -551,6 +551,7 @@
         helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx
         --namespace {{ infra_namespace }}
         --version {{ ingress_nginx_chart_version }}
+        --values {{ repository_root }}/config/ingress-nginx-values.yaml
         --set controller.service.type=LoadBalancer
         --set controller.service.enableHttp=true
         --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true'
@@ -598,6 +599,7 @@
         helm upgrade --install external-secrets external-secrets/external-secrets
         --namespace {{ infra_namespace }}
         --version {{ external_secrets_chart_version }}
+        --values {{ repository_root }}/config/external-secrets-values.yaml
         --set installCRDs=true
         --wait --timeout {{ external_secrets_helm_timeout }}
       when: vault_stack_effective

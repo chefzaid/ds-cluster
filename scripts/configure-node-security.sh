@@ -990,6 +990,15 @@ if private_node_policy; then
   fi
 fi
 
+# Search workloads need this node setting; application init containers must
+# never receive privileged access just to set a host-wide sysctl.
+current_map_count="$(sysctl -n vm.max_map_count)"
+if (( current_map_count < 1048576 )); then
+  current_map_count=1048576
+fi
+printf 'vm.max_map_count=%s\n' "$current_map_count" | write_root_file /etc/sysctl.d/99-bm-search.conf
+sudo sysctl -p /etc/sysctl.d/99-bm-search.conf >/dev/null
+
 configure_tailscale_firewall_integration
 validate_worker_private_ssh_before_firewall
 configure_ufw

@@ -21,9 +21,55 @@ metadata:
   namespace: gitlab-runners
 rules:
   - apiGroups: [""]
-    resources: ["configmaps", "events", "pods", "pods/attach", "pods/exec", "pods/log", "secrets", "serviceaccounts", "services"]
-    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+    resources: [pods]
+    verbs: [create, delete, get, list, watch]
 
+  - apiGroups:
+    - ''
+    resources:
+    - pods/attach
+    - pods/exec
+    verbs:
+    - create
+    - delete
+    - get
+    - patch
+  - apiGroups:
+    - ''
+    resources:
+    - pods/log
+    verbs:
+    - get
+    - list
+  - apiGroups:
+    - ''
+    resources:
+    - secrets
+    verbs:
+    - create
+    - delete
+    - get
+    - update
+  - apiGroups:
+    - ''
+    resources:
+    - serviceaccounts
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - services
+    verbs:
+    - create
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - events
+    verbs:
+    - list
+    - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -280,12 +326,15 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
           volumeMounts:
             - name: config
               mountPath: /config
               readOnly: true
             - name: home
               mountPath: /home/gitlab-runner
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: config
           configMap:
@@ -293,6 +342,9 @@ spec:
         - name: home
           emptyDir: {}
 
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
 ---
 apiVersion: v1
 kind: Service
