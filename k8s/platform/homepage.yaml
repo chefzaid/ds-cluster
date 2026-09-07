@@ -88,7 +88,11 @@ data:
       Applications:
         icon: mdi-apps
         style: row
-        columns: 5
+        columns: 4
+      Corporate:
+        icon: mdi-office-building
+        style: row
+        columns: 4
       DevOps & Delivery:
         icon: mdi-source-branch
         style: row
@@ -115,7 +119,9 @@ data:
         columns: 4
 
   services.yaml: |
-    - Applications:
+    - Applications: []
+
+    - Corporate:
         - Odoo:
             icon: odoo.png
             href: https://odoo.__PUBLIC_DOMAIN__
@@ -284,6 +290,16 @@ data:
             icon: cloudflare.png
             href: https://dash.cloudflare.com/
             description: DNS, TLS, CDN, WAF, rate limiting, and Access
+        - Trivy:
+            icon: trivy.png
+            href: https://grafana.__PUBLIC_DOMAIN__/d/trivy-security/trivy-security-reports
+            description: Cluster vulnerability, configuration, RBAC, secret, and compliance reports
+            namespace: infra
+            podSelector: app.kubernetes.io/name=trivy-operator
+        - Lynis:
+            icon: ubuntu-linux.png
+            href: https://kibana.__PUBLIC_DOMAIN__/app/dashboards#/view/lynis-security-audits
+            description: Monthly control-plane audits, Kibana reporting, and transient worker scans
         - CrowdSec:
             icon: crowdsec.png
             description: Internet-facing node detection and collaborative blocking
@@ -293,15 +309,6 @@ data:
         - UFW:
             icon: mdi-wall-fire
             description: Every-node firewall and Cloudflare origin restriction
-        - Trivy:
-            icon: trivy.png
-            href: https://grafana.__PUBLIC_DOMAIN__/d/trivy-security/trivy-security-reports
-            description: Cluster vulnerability, configuration, RBAC, secret, and compliance reports
-            namespace: infra
-            podSelector: app.kubernetes.io/name=trivy-operator
-        - Lynis:
-            icon: ubuntu-linux.png
-            description: Monthly control-plane audits, Kibana reporting, and transient worker scans
 
     - Kubernetes System:
         - CoreDNS:
@@ -432,7 +439,7 @@ spec:
         app.kubernetes.io/name: homepage
         app.kubernetes.io/part-of: bm-cluster
       annotations:
-        bm-cluster/config-revision: "6"
+        bm-cluster/config-revision: "7"
     spec:
       serviceAccountName: homepage
       automountServiceAccountToken: true

@@ -86,6 +86,10 @@ with its CI/CD pipeline and Argo CD Application. This repository maintains the
 apex DNS record and shared ingress infrastructure. Cloudflare Access protects the
 administrative host inventory in `config/platform.env` through Keycloak SSO
 with a 24-hour session.
+The Applications row uses app-owned Homepage weights to show Swirl IT, DevApp,
+Thoughty, then Indezy. Odoo is under Corporate. Security & Identity links Trivy
+to its Grafana reports and Lynis to the provisioned Kibana **Lynis Security
+Audits** dashboard, with both entries preceding CrowdSec.
 Cluster automation uses internal Kubernetes service names, so these public
 administration hostnames can remain protected without blocking builds,
 deployments, package downloads, or scans.
