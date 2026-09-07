@@ -43,7 +43,7 @@ and [pgJDBC changelog](https://jdbc.postgresql.org/changelogs/).
 | Elasticsearch | 9.4.6 | 0 / 101 | 0 / 40 |
 | Kibana | 9.4.6 | 2 / 85 | 0 / 9 |
 | Logstash | 9.4.6 | 2 / 68 | 0 / 15 |
-| Filebeat | 9.4.6 | 1 / 56 | 0 / 0 |
+| Filebeat | 9.4.6 Wolfi | 1 / 56 | 0 / 0 |
 | Grafana | 13.2.1 | 5 / 179 | 3 / 159 |
 | Keycloak | 26.7.3 | 0 / 4 | 0 / 2 |
 | Homepage | 2.2.0 | 1 / 13 | 1 / 12 |
@@ -58,8 +58,12 @@ and applications; the replacement reports zero vulnerabilities. Redis retains
 version 8.10.0 and its configured UID/GID 999. It has no persistent volume in
 this repository, and the Alpine variant passed startup and PING checks.
 
+Filebeat uses the official Wolfi variant because the standard 9.4.6 image
+requires x86-64-v3 CPU features unavailable on this node. The Wolfi image
+passed a read-only startup check and a fresh vulnerability scan.
+
 The K3s installer default advances to 1.36.4+k3s1, which updates containerd and
-the local-path provisioner. This does not upgrade existing nodes by itself.
+the local-path provisioner. Existing nodes require a separate upgrade.
 The current release retains the same CoreDNS and metrics-server versions.
 
 Upstream release information:
