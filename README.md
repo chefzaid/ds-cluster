@@ -66,7 +66,10 @@ Homepage is the single entry point for every installed application, platform
 tool, internal data service, observability component, security tool, and
 Kubernetes system service. Public entries are clickable; internal-only entries
 show their purpose and live Kubernetes status without exposing them publicly.
-This repository owns Odoo in the shared `apps` namespace. DevApp, Thoughty,
+This repository owns Odoo in the `corp` namespace, reserved for corporate/vendor
+software. First-party source applications run in `apps`. See the
+[Odoo namespace migration](docs/odoo-namespace.md) before updating an older
+installation. DevApp, Thoughty,
 Indezy, and the public website publish dashboard entries from their own
 Kubernetes Ingress annotations, without adding application-specific runtime
 resources here. Their public hostnames remain part of the central Cloudflare
@@ -119,7 +122,7 @@ The infrastructure repository lives at `<gitlab-group>/bm-cluster` in GitLab.
 Its instance-scoped Kubernetes runner executes `.gitlab-ci.yml` in the isolated
 `gitlab-runners` namespace. The default branch is continuously reconciled by
 the `bm-cluster` Argo CD Application. Centrally owned Odoo resources under
-`k8s/apps` are included when `appsEnabled=true`; DevApp, Thoughty, Indezy, and
+`k8s/corp` are included when `appsEnabled=true`; DevApp, Thoughty, Indezy, and
 the website remain outside this infrastructure GitOps boundary and reconcile
 through their own Argo CD Applications.
 
@@ -549,7 +552,7 @@ user hierarchy; Vault uses tokens rather than a password.
 | MongoDB | `admin` | `kubectl get secret -n infra mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' \| base64 -d` |
 | PostgreSQL | `admin` | `kubectl get secret -n infra postgres-secret -o jsonpath='{.data.POSTGRES_PASSWORD}' \| base64 -d` |
 | Longhorn origin login | `admin` | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=password secret/infra/platform-ui` |
-| Odoo | SSO primary email | `kubectl get secret -n apps odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' \| base64 -d` |
+| Odoo | SSO primary email | `kubectl get secret -n corp odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' \| base64 -d` |
 | Portainer | `admin` | `kubectl get secret -n infra portainer-auth-secret -o jsonpath='{.data.ADMIN_PASSWORD}' \| base64 -d` |
 | SonarQube | `admin` | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=admin_password secret/infra/sonarqube` |
 | SonarQube automation | `admin` token | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=admin_token secret/infra/sonarqube` |
@@ -880,7 +883,8 @@ EditorConfig and Git attributes keep text formatting portable.
 | `k8s/base/` | Cluster namespaces, security baseline, host-policy record, and internal CoreDNS aliases |
 | `k8s/datastores/` | PostgreSQL, Kafka, Redis, and MongoDB resources |
 | `k8s/platform/` | Infrastructure services, observability, ingress, Vault integration, and bootstrap jobs |
-| `k8s/apps/` | Repository-owned application resources |
+| `k8s/apps/` | Shared support for first-party application workloads |
+| `k8s/corp/` | Centrally owned corporate applications (Odoo) |
 | `k8s/addons/` | Optional cluster add-ons and their manually triggered jobs |
 | `k8s/Chart.yaml` | Argo CD Helm entry point that renders the selected public/private domains and vendors the pinned Trivy Operator dependency |
 | `ansible/` | Ansible deployment entry point |

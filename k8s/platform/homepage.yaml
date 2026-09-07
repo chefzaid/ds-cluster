@@ -120,7 +120,7 @@ data:
             icon: odoo.png
             href: https://odoo.__PUBLIC_DOMAIN__
             description: ERP and CRM application
-            namespace: apps
+            namespace: corp
             podSelector: app=odoo
 
     - DevOps & Delivery:

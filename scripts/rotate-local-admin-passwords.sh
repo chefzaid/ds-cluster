@@ -392,7 +392,7 @@ refresh_external_secret "$NAMESPACE" grafana-admin-secret
 refresh_external_secret "$NAMESPACE" keycloak-admin-secret
 refresh_external_secret "$NAMESPACE" portainer-auth-secret
 refresh_external_secret "$NAMESPACE" elasticsearch-security-bootstrap
-refresh_external_secret apps odoo-secret
+refresh_external_secret corp odoo-secret
 
 wait_secret_value "$NAMESPACE" postgres-secret POSTGRES_PASSWORD
 wait_secret_value "$NAMESPACE" mongodb-secret MONGO_INITDB_ROOT_PASSWORD

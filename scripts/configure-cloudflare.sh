@@ -1125,9 +1125,11 @@ while IFS= read -r namespace; do
     append_unique_namespace "$namespace"
 done < <(kubectl get ingress -A -o json 2>/dev/null | jq -r --arg secret "$TLS_SECRET_NAME" \
     '.items[] | select(any(.spec.tls[]?; .secretName == $secret)) | .metadata.namespace' | sort -u)
-if kubectl get namespace apps >/dev/null 2>&1; then
-    append_unique_namespace apps
-fi
+for application_namespace in apps corp; do
+    if kubectl get namespace "$application_namespace" >/dev/null 2>&1; then
+        append_unique_namespace "$application_namespace"
+    fi
+done
 
 for namespace in "${TLS_NAMESPACES[@]}"; do
     if ! kubectl get namespace "$namespace" >/dev/null 2>&1; then

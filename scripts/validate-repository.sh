@@ -49,7 +49,7 @@ source "$PLATFORM_CONFIG"
 
 mapfile -d '' -t kubernetes_manifests < <(
     find "$K8S_ROOT/base" "$K8S_ROOT/datastores" "$K8S_ROOT/platform" \
-        "$K8S_ROOT/apps" "$K8S_ROOT/addons" -type f -name '*.yaml' -print0 | LC_ALL=C sort -z
+        "$K8S_ROOT/apps" "$K8S_ROOT/corp" "$K8S_ROOT/addons" -type f -name '*.yaml' -print0 | LC_ALL=C sort -z
 )
 
 csv_to_file() {
@@ -455,9 +455,9 @@ else
     fail "Keycloak seeds display names but preserves later user edits"
 fi
 
-if grep -Fq "'login': os.environ['SSO_PRIMARY_EMAIL']" "$K8S_ROOT/apps/odoo.yaml" &&
-   grep -Fq "'email': os.environ['SSO_PRIMARY_EMAIL']" "$K8S_ROOT/apps/odoo.yaml" &&
-   ! grep -Fq "'login': 'admin'" "$K8S_ROOT/apps/odoo.yaml"; then
+if grep -Fq "'login': os.environ['SSO_PRIMARY_EMAIL']" "$K8S_ROOT/corp/odoo.yaml" &&
+   grep -Fq "'email': os.environ['SSO_PRIMARY_EMAIL']" "$K8S_ROOT/corp/odoo.yaml" &&
+   ! grep -Fq "'login': 'admin'" "$K8S_ROOT/corp/odoo.yaml"; then
     pass "Odoo uses one stable SSO administrator login"
 else
     fail "Odoo uses one stable SSO administrator login"
@@ -478,7 +478,7 @@ if grep -Fq 'roles/realm-admin' "$K8S_ROOT/platform/keycloak-sso.yaml" &&
    grep -Fq "put_user admin \"\$ADMIN_PASSWORD\" '[\"superuser\"]'" "$K8S_ROOT/platform/elk.yaml" &&
    grep -Fq '"Role": 1' "$K8S_ROOT/platform/portainer-bootstrap-job.yaml" &&
    grep -Fq 'value: "false"' "$K8S_ROOT/platform/kafka-ui.yaml" &&
-   grep -Fq "self.env.ref('base.user_admin')" "$K8S_ROOT/apps/odoo.yaml"; then
+   grep -Fq "self.env.ref('base.user_admin')" "$K8S_ROOT/corp/odoo.yaml"; then
     pass "the shared Keycloak administrator maps to every product's maximum supported role"
 else
     fail "the shared Keycloak administrator maps to every product's maximum supported role"

@@ -7,6 +7,7 @@
   vars:
     infra_namespace: infra
     apps_namespace: apps
+    corp_namespace: corp
     repository_root: "{{ playbook_dir }}/.."
     k8s_dir: "{{ repository_root }}/k8s"
     argocd_values_file: "{{ repository_root }}/config/argocd-values.yaml"
@@ -396,6 +397,12 @@
       changed_when: "'created' in apps_namespace_apply.stdout or 'configured' in apps_namespace_apply.stdout"
       when: apps_enabled
 
+    - name: Ensure the corporate application namespace exists
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/base/corp-namespace.yaml
+      register: corp_namespace_apply
+      changed_when: "'created' in corp_namespace_apply.stdout or 'configured' in corp_namespace_apply.stdout"
+      when: apps_enabled
+
     - name: Configure K3s containerd for the internal registry alias
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-k3s-registry-mirror.sh"
       environment:
@@ -747,7 +754,7 @@
       when: platform_services_enabled
 
     - name: Deploy Odoo and its ingress
-      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/apps/odoo.yaml
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/corp/odoo.yaml
       register: odoo_apply
       changed_when: "'created' in odoo_apply.stdout or 'configured' in odoo_apply.stdout"
       when: odoo_enabled
@@ -755,14 +762,14 @@
     - name: Wait for Odoo secrets
       ansible.builtin.command: >-
         kubectl wait --for=condition=Ready externalsecret/odoo-secret
-        -n {{ apps_namespace }} --timeout={{ external_secret_wait_timeout }}
+        -n {{ corp_namespace }} --timeout={{ external_secret_wait_timeout }}
       changed_when: false
       when: odoo_enabled
 
     - name: Wait for Odoo
       ansible.builtin.command: >-
         kubectl wait --for=condition=ready pod -l app=odoo
-        -n {{ apps_namespace }} --timeout={{ platform_wait_timeout }}
+        -n {{ corp_namespace }} --timeout={{ platform_wait_timeout }}
       changed_when: false
       when: odoo_enabled
 

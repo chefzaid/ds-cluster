@@ -1130,6 +1130,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$INSTALL_APPS" == "true" ]]; then
         step "Creating the shared application namespace..."
         kubectl apply -f "$K8S_DIR/base/apps-namespace.yaml" >/dev/null
+        kubectl apply -f "$K8S_DIR/base/corp-namespace.yaml" >/dev/null
     fi
     step "Configuring the cluster-only $INTERNAL_DNS_ZONE service aliases..."
     for manifest in "${FOUNDATION_MANIFEST_ARRAY[@]}"; do
@@ -1146,6 +1147,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         ensure_tls_secret infra swirlit-dev-tls "${tls_domains[@]}"
         if [[ "$INSTALL_APPS" == "true" ]]; then
             ensure_tls_secret apps swirlit-dev-tls "${tls_domains[@]}"
+            ensure_tls_secret corp swirlit-dev-tls "${tls_domains[@]}"
         fi
     fi
 
@@ -1352,11 +1354,11 @@ EOF
     fi
 
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
-        step "Deploying Odoo in the apps namespace..."
-        kubectl apply -f "$K8S_DIR/apps/odoo.yaml"
-        kubectl wait --for=condition=Ready externalsecret/odoo-secret -n apps \
+        step "Deploying Odoo in the corp namespace..."
+        kubectl apply -f "$K8S_DIR/corp/odoo.yaml"
+        kubectl wait --for=condition=Ready externalsecret/odoo-secret -n corp \
             --timeout="$EXTERNAL_SECRET_WAIT_TIMEOUT"
-        kubectl wait --for=condition=ready pod -l app=odoo -n apps \
+        kubectl wait --for=condition=ready pod -l app=odoo -n corp \
             --timeout="$PLATFORM_WAIT_TIMEOUT"
     fi
 
@@ -1428,7 +1430,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     echo "  Kafka UI: kubectl get secret -n infra kafka-ui-auth-secret -o go-template='{{printf \"%s\" (index .data \"SPRING_SECURITY_USER_NAME\" | base64decode)}}:{{printf \"%s\" (index .data \"SPRING_SECURITY_USER_PASSWORD\" | base64decode)}}'"
     echo "  Portainer: username admin; password: kubectl get secret -n infra portainer-auth-secret -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d"
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
-        echo "  Odoo:     username admin; password: kubectl get secret -n apps odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' | base64 -d"
+        echo "  Odoo:     username admin; password: kubectl get secret -n corp odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' | base64 -d"
     fi
     echo "  Descheduler trigger: kubectl create -f k8s/addons/descheduler-run-job.yaml"
     echo "  Add workers:          ./install-worker.sh"
@@ -1442,6 +1444,8 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     kubectl get pods -n infra --no-headers 2>&1 | awk '{printf "  %-50s %s\n", $1, $2}'
     if [[ "$INSTALL_APPS" == "true" ]]; then
         echo ""
+        echo "Corporate pod status:"
+        kubectl get pods -n corp --no-headers 2>&1 | awk '{printf "  %-50s %s\n", $1, $2}'
         echo "App pod status:"
         kubectl get pods -n apps --no-headers 2>&1 | awk '{printf "  %-50s %s\n", $1, $2}'
     fi
