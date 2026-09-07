@@ -56,3 +56,28 @@ authenticated `/odoo` page. Confirm the dark CSS bundle loads successfully and
 the user-menu switch works in both directions. Review the upstream module for
 compatibility before upgrading Odoo's major version. To disable dark mode, use
 the switch. Before removing the add-on files, uninstall the module from Odoo.
+
+## Vault
+
+Vault's embedded UI has no supported dark-mode preference. The
+`vault-ui-theme` Deployment applies the same pinned Dark Reader site API and
+CSP adjustment used for Sonar. Its independent ConfigMap contains the assets,
+license and NGINX configuration. It reuses the platform's existing NGINX image,
+requests 16 MiB of memory, and has only an 8 MiB memory-backed temporary volume.
+
+A separate Ingress routes only `/ui` to this helper. NGINX inserts the local
+theme scripts into HTML and serves the four explicitly allowed theme files.
+The original `vault-ingress` continues to send `/v1` and other paths directly to
+Vault. The helper accepts only GET/HEAD for UI assets, strips request headers and
+bodies before forwarding, and has no Vault credentials or service-account token.
+It neither caches responses nor writes access logs. Network policy allows ingress
+from NGINX and egress only to Vault and cluster DNS. Vault itself is not restarted.
+
+Dark mode is the default; the bottom-right **Dark / Light** button saves the
+choice in this browser under `swirlit.vault.theme`. Vault's existing CSP is
+preserved. Test login, dashboard and navigation with a temporary token, revoke
+the token afterward, and confirm dark/light reload persistence. Also verify that
+the public `/v1/sys/health` response matches Vault directly and that the helper
+rejects API paths. Removing `vault-ui-theme`'s Ingress restores the original UI
+route immediately. The helper is included in the platform install inventory and
+GitOps; no Vault Helm release change is needed.
